@@ -56,47 +56,47 @@ export const HAND = { PUSH: 0, SMOOTH: 1, PILE: 2, PRINT: 3 };
 
 export const params = {
   // 降雪
-  intensity: 0.55,      // 降雪强度 0..1
-  flakeSize: 0.85,      // 雪花大小
-  windSpeed: 0.9,       // 风力 m/s
+  intensity: 0.41,      // 降雪强度 0..1
+  flakeSize: 0.63,      // 雪花大小
+  windSpeed: 1.65,       // 风力 m/s
   windDir: 210,         // 风向（度）
-  turbulence: 0.55,     // 湍流 / 飘舞
+  turbulence: 1.5,     // 湍流 / 飘舞
   falling: true,        // 是否下雪
 
   // 积雪
   depth: 0.20,          // 目标积雪厚度（米）
-  deposit: 0.55,        // 堆积速度
+  deposit: 0.6,        // 堆积速度
   softness: 0.5,        // 松软度（影响休止角与自平整）
-  cover: 0.45,          // 新雪掩盖旧痕迹的速度
-  drift: 0.6,           // 雪面起伏 / 风吹雪堆
+  cover: 0.69,          // 新雪掩盖旧痕迹的速度
+  drift: 0.45,           // 雪面起伏 / 风吹雪堆
   crust: 0.55,          // 风壳：表层被风吹硬的程度
   strata: 0.6,          // 切面上的层理强度
-  crumble: 0.7,         // 陡边的破碎程度
+  crumble: 0.4,         // 陡边的破碎程度
   sss: 0.8,             // 次表面散射强度
   sssDepth: 2.2,        // 光在雪里的有效光程（米）—— 越长越蓝
 
   // 手
-  handSize: 0.9,        // 手掌半径（米）
-  press: 0.55,          // 按压力度
-  pile: 0.8,            // 推雪堆积量
-  spray: 0.7,           // 扬起的粉雪量
+  handSize: 0.5,        // 手掌半径（米）
+  press: 0.23,          // 按压力度
+  pile: 0.6,            // 推雪堆积量
+  spray: 0.3,           // 扬起的粉雪量
   mode: HAND.PUSH,      // 当前手势
 
   // 环境
-  timeOfDay: 0.70,      // 0..1（午后斜阳，影子最长）
-  overcast: 0.18,       // 阴天程度
-  fog: 0.0030,          // 霾浓度：绿光每米的消光系数
+  timeOfDay: 0.76,      // 0..1（午后斜阳，影子最长）
+  overcast: 0.28,       // 阴天程度
+  fog: 0.0045,          // 霾浓度：绿光每米的消光系数
   hazeHeight: 140,      // 霾的标高（米）—— 越小，山谷越浑、山脊越清
   bloom: 0.5,           // 辉光
-  vignette: 0.30,       // 镜头暗角
-  lensBlur: 0.35,       // 四角虚化
-  envLight: 0.30,       // 环境贴图的间接光强度
-  hdriMix: 1.0,         // 环境贴图里 HDRI 占比（0 = 纯程序化天空）
+  vignette: 0.40,       // 镜头暗角
+  lensBlur: 1,       // 四角虚化
+  envLight: 0.40,       // 环境贴图的间接光强度
+  hdriMix: 0.73,         // 环境贴图里 HDRI 占比（0 = 纯程序化天空）
   hdriTint: 0.60,       // 让 HDRI 跟着「时间/阴天」的配色走
   hdriRot: 0,           // HDRI 绕 Y 轴旋转（度）
   hdriFollowSun: true,  // 自动把 HDRI 最亮处对到太阳方位
-  sparkle: 0.9,         // 雪面闪烁的亮度
-  crystals: 0.75,       // 表层冰晶的密度
+  sparkle: 1,         // 雪面闪烁的亮度
+  crystals: 1,       // 表层冰晶的密度
   quality: 1,           // 0 低 / 1 中 / 2 高
 
   // 后期

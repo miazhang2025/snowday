@@ -32,6 +32,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 
 import { snowyVersionOf } from './models.js';
+import { terrainNormal } from './terrain.js';
 
 let _loader = null;
 function loader() {
@@ -201,6 +202,10 @@ const _p = new THREE.Vector3();
 const _s = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
 const _white = new THREE.Color(1, 1, 1);
+const _n = new THREE.Vector3();
+const _tilt = new THREE.Quaternion();
+const _flat = new THREE.Quaternion();
+const _v = new THREE.Vector3();
 
 /**
  * 载入一个 glb，把它的所有实例装进 BatchedMesh。
@@ -215,12 +220,20 @@ const _white = new THREE.Color(1, 1, 1);
  *                                默认五级：级差小了，每次切换的视觉跳变也小
  * @param {number} opts.coatBias     盖雪倾向
  * @param {number} opts.snowAmount   盖雪量倍率
+ * @param {number} opts.alignSlope   0..1，让模型的「上」朝地形法线倾斜多少。
+ *                                   石头给 1（石头躺在坡上本来就是斜的），
+ *                                   树给 0（树是竖着长的）
+ * @param {number} opts.sink         往地里埋多深，按模型高度的比例算
+ * @param {number} opts.footprint    接触面半径占包围盒半宽的比例。松树的包围盒
+ *                                   半宽是**树冠**，真正着地的只有树干，所以给 0.12；
+ *                                   石头整个身子都贴着地，给 1
  * @returns {Promise<{ update(camera): void, meshes: THREE.BatchedMesh[], stats: object }>}
  */
 export async function batchModel(scene, url, opts = {}) {
   const {
     instances = [], targetHeight = 0, groundAt = null,
     lods = [1, 0.62, 0.38, 0.22, 0.12], coatBias = 0, snowAmount = 1,
+    alignSlope = 0, sink = 0.02, footprint = 1,
   } = opts;
 
   const gltf = await loader().loadAsync(url);
@@ -249,10 +262,11 @@ export async function batchModel(scene, url, opts = {}) {
   for (const b of baked) b.geo.applyMatrix4(_m);
 
   const height = size.y * scale;
+  const footR = Math.max(size.x, size.z) * scale * 0.5;
 
   // ---- 每种材质一个 BatchedMesh ----
   const meshes = [];
-  const stats = { url, instances: instances.length, height, lodTris: [] };
+  const stats = { url, instances: instances.length, height, footR, footprint, sink, lodTris: [] };
 
   for (const { geo, material } of baked) {
     // 镂空卡片按面积丢三角形，封闭实体做顶点聚类 —— 反过来用都是灾难
@@ -281,8 +295,48 @@ export async function batchModel(scene, url, opts = {}) {
     const ids = levels.map((g) => bm.addGeometry(g));
 
     for (const [x, z, ry = 0, mul = 1] of instances) {
+      // 模型的底面是一个**水平**平面（装配时把包围盒底面对齐到了 y=0），
+      // 而它只按中心那一点的地形高度摆放。坡上于是下坡侧整个悬空 ——
+      // 实测最狠的一块 rock1 悬空 2.1m，半宽才 1.1m。
+      //
+      // 解法是让它跟着坡倾斜：底面和坡面平行了，就既不悬空也不埋进去。
+      // 石头本来就该是斜躺在坡上的，所以给满；树是竖着长的，给 0。
       _q.setFromAxisAngle(_up, ry);
-      _p.set(x, groundAt ? groundAt(x, z) : 0, z);
+      if (alignSlope > 0) {
+        terrainNormal(x, z, _n);
+        _tilt.setFromUnitVectors(_up, _n);
+        if (alignSlope < 1) _tilt.slerp(_flat, 1 - alignSlope);
+        _q.premultiply(_tilt);
+      }
+      // 「放下去直到碰到地面」。
+      //
+      // 光倾斜还不够：倾斜只能贴合一个**平面**，而地形是弯的。一块坐在凸起
+      // 山脊上的大石头，四周的地面是二次地掉下去的，切平面追不上 ——
+      // 实测最狠的一块加了倾斜之后仍然悬空 1.6m。
+      //
+      // 所以底面边缘取一圈点，转到世界之后各自问一次地形高度，取**最低**的那个解。
+      //
+      // 注意这不是刚体静止的规矩：刚体应该停在「最先碰到的那一点」（取最高解），
+      // 那样凸起处的边缘会翘起来悬空。这里故意取最低 —— 宁可整体埋进去一点，
+      // 也不能有任何一角悬在空中。反正外面盖着二十厘米的雪，埋一点看不出来，
+      // 悬空一点非常显眼。
+      //
+      // 倾斜之后两个解本来就只差地形在这块脚印上的弯曲量，通常只有几厘米。
+      let gy = Infinity;
+      if (groundAt) {
+        const fr = footR * mul * footprint;
+        gy = groundAt(x, z);
+        for (const rr of (fr > 1e-3 ? [fr, fr * 0.55] : [])) {
+          for (let k = 0; k < 8; k++) {
+            const a = (k / 8) * Math.PI * 2;
+            _v.set(Math.cos(a) * rr, 0, Math.sin(a) * rr).applyQuaternion(_q);
+            gy = Math.min(gy, groundAt(x + _v.x, z + _v.z) - _v.y);
+          }
+        }
+      } else gy = 0;
+      // 再往下埋一点点，接触处才不是一条发丝一样的缝
+      gy -= sink * height * mul;
+      _p.set(x, gy, z);
       _s.setScalar(mul);
       _m.compose(_p, _q, _s);
       const a = bm.addInstance(ids[0]);

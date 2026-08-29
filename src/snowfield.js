@@ -38,6 +38,7 @@ import {
   cellOf, spanOf, U,
 } from './config.js';
 import { terrainSample } from './terrain.js';
+import { groundAlbedo, groundNormalXY, groundRough } from './ground.js';
 
 // ---------------------------------------------------------------- 通用小工具
 
@@ -369,7 +370,12 @@ function createLevel(k, coarse) {
       // L0 是形变的**来源**，不能反过来读留存（会自激）。
       // L1/L2 不可交互，直接把留存并进平衡值再快速拉齐就行 ——
       // 这样痕迹跨过 L0 的边界进入 L1 时是连着的，不会齐着一个圆断掉。
-      const want = base.add(stashAt(cw).x).max(0);
+      //
+      // 平衡值必须乘 snowProgress（雪下到几成了）。不乘的话 L1/L2 会无视
+      // 「下了多少雪」直接跳到满雪：清空积雪时只有 L0 那 26m 真的清掉，
+      // 外面一圈瞬间弹回来，边界是一条直线；启动时也反过来 ——
+      // 近处还是裸地，远处已经积满了。
+      const want = base.mul(U.snowProgress).add(stashAt(cw).x).max(0);
       nh.assign(mix(nh, want, U.dt.mul(8.0).min(1)));
     }
 
@@ -728,6 +734,12 @@ function snowMaterial(L) {
       g = g.add(vec3(cb.y.negate(), 0, cb.z.negate()).mul(CRUMBLE_F).mul(U.crumble).mul(slopeW));
     }
 
+    // 露出来的地面用它自己的法线贴图。地面基本是水平的，切线空间的 x/y
+    // 就当成世界的 x/z 用 —— 陡壁上会有点偏，但那是细颗粒噪声，看不出来。
+    const bare = float(1).sub(smoothstep(0.002, 0.032, vDep));
+    const gn = groundNormalXY(positionWorld.xz);
+    g = g.add(vec3(gn.x, 0, gn.y).mul(bare).mul(0.55));
+
     return transformNormalToView(n.add(g).normalize());
   })();
 
@@ -740,7 +752,12 @@ function snowMaterial(L) {
     const fresh = vec3(0.900, 0.932, 0.980);    // 新粉雪：最白
     const crustC = vec3(0.878, 0.914, 0.968);   // 风壳：略灰、略致密
     const packC = vec3(0.700, 0.775, 0.900);    // 压实雪：暗且偏蓝
-    const ground = vec3(0.086, 0.079, 0.070);   // 露出来的地面 / 岩壁
+
+    // 露出来的地面：真实的 PBR 地表，不再是一个常数深色。
+    // 再叠一层很低频的明暗把平铺感打散 —— 1.75m 一次平铺，
+    // 铺到几十米外不打散的话会看出规则的格子。
+    const gTile = float(1).add(noised(positionWorld.xz.mul(0.07)).x.sub(0.5).mul(0.55));
+    const ground = groundAlbedo(positionWorld.xz).mul(gTile);
 
     // 极细的颗粒：雪不是一张均匀的白纸，近看有糖粒一样的明暗。
     // 210 周期/米（波长 5mm），同样按像素足迹关掉，否则会烂成噪点。
@@ -807,8 +824,11 @@ function snowMaterial(L) {
     const cr = vCrust.clamp(0, 1).mul(float(1).sub(pk));
     const n = noised(positionWorld.xz.mul(3.5)).x.sub(0.5).mul(0.10);
     // 新雪是无数松散冰晶面 → 中等粗糙；风壳被风磨过、压实雪被压过 → 更光滑
-    const base = mix(mix(float(0.68), float(0.38), cr), float(0.30), pk.mul(0.9))
+    const snowR = mix(mix(float(0.68), float(0.38), cr), float(0.30), pk.mul(0.9))
       .add(n).clamp(0.13, 0.92);
+    // 没盖住雪的地方用地面自己的粗糙度（这套土大约 0.87，比雪粗得多）
+    const cover = smoothstep(0.002, 0.032, vDep);
+    const base = mix(groundRough(positionWorld.xz), snowR, cover);
 
     // 远处按距离加粗糙度。一个像素在 100m 外覆盖十几厘米的雪面，里面本来就有
     // 无数朝向；用一个窄高光去拟合它，等于把顶点法线的插值误差放大上百倍 ——
@@ -826,16 +846,22 @@ function snowMaterial(L) {
   mat.thicknessColorNode = Fn(() => {
     const thin = float(1).sub(smoothstep(0.02, 0.17, vDep));           // 薄雪透得最多
     const crest = vCav.negate().max(0).div(float(cell)).clamp(0, 1);   // 雪堤的薄棱也透
+    // 必须乘 cover：thin 在雪深为 0 时是 **1**，也就是「完全没有雪的地方
+    // 次表面散射最强」—— 把雪推光之后露出来的土会像自己在发光。
     const amount = thin.mul(0.55).add(crest.mul(0.35)).add(U.sssAmount)
       .mul(vLight.x.clamp(0, 1))
+      .mul(smoothstep(0.002, 0.032, vDep))
       .mul(float(1).sub(vPack.clamp(0, 1).mul(0.40)));
     return iceTransmit.mul(amount);
   })();
 
+  // 各向同性的绕射项同理：没有雪就不该有绕射
+  const sssCover = smoothstep(0.002, 0.032, vDep);
+
   // 各向同性的绕射项。它不乘 NdotL，所以会绕到背光面去 ——
   // 这就是次表面散射让明暗交界变柔的原因，也是雪不像石膏的关键。
   mat.thicknessAmbientNode = Fn(() =>
-    U.sssWrap.div(float(1).add(vPack.clamp(0, 1).mul(1.8))))();
+    U.sssWrap.div(float(1).add(vPack.clamp(0, 1).mul(1.8))).mul(sssCover))();
 
   mat.thicknessDistortionNode = float(0.40);
   mat.thicknessAttenuationNode = float(0.90);
@@ -1062,7 +1088,7 @@ function createSkirt(scene) {
     const n = mx_fractal_noise_float(vec3(positionWorld.xz.mul(0.35), 3.0), 3, 2.2, 0.55, 1.0)
       .mul(0.5).add(0.5);
     return mix(mix(vec3(0.780, 0.822, 0.900), vec3(0.895, 0.925, 0.980), n),
-      vec3(0.086, 0.079, 0.070), bare);
+      groundAlbedo(positionWorld.xz), bare);
   })();
 
   const inner = spanOf(LEVELS - 1) * 0.5 - cellOf(LEVELS - 1) * 2;   // 往里咬两格，别留缝

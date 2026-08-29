@@ -213,26 +213,31 @@ async function init() {
 
   place(PINE_URL, {                       // 松树：主力
     targetHeight: 4.2, coatBias: 0.22, snowAmount: 1.25,
+    alignSlope: 0.12, sink: 0.02, footprint: 0.12,   // 树竖着长；着地的只有树干，不是树冠
     instances: both(scatter(26, 9.0, 34.0, 6607, 0.62, 1.5),
       scatter(560, 30.0, 380.0, 3391, 0.62, 1.7, { clumps: 34, spread: 24 })),
   });
   place(ROCK1_URL, {                      // 大石
     targetHeight: 0.95, coatBias: 0.28, snowAmount: 1.4,
+    alignSlope: 1.0, sink: 0.07,      // 石头躺在坡上本来就是斜的
     instances: both(scatter(10, 4.2, 16.0, 1327, 0.7, 1.6),
       scatter(180, 16.0, 340.0, 7717, 0.7, 2.4)),
   });
   place(ROCK2_URL, {                      // 小石
     targetHeight: 0.45, coatBias: 0.28, snowAmount: 1.4,
+    alignSlope: 1.0, sink: 0.07,
     instances: both(scatter(14, 3.4, 15.0, 9091, 0.6, 1.5),
       scatter(300, 14.0, 340.0, 2273, 0.6, 2.0, { clumps: 40, spread: 16 })),
   });
   place(TREE_URL, {                       // 枯木（树桩）
     targetHeight: 1.15, coatBias: 0.30, snowAmount: 1.5,
+    alignSlope: 0.55, sink: 0.05, footprint: 0.85,   // 树桩：一半跟坡，一半保持竖直
     instances: both(scatter(9, 5.0, 13.0, 4471, 0.7, 1.35),
       scatter(220, 13.0, 320.0, 5591, 0.7, 1.6, { clumps: 30, spread: 18 })),
   });
   place(PLANT_URL, {                      // 枯草丛：小，很快就被剔掉
     targetHeight: 0.85, coatBias: 0.10, snowAmount: 0.7,
+    alignSlope: 0.40, sink: 0.03, footprint: 0.35,
     instances: both(scatter(30, 3.2, 13.0, 8123, 0.55, 1.5),
       scatter(600, 12.0, 170.0, 6143, 0.55, 1.7, { clumps: 46, spread: 11 })),
   });

@@ -12,7 +12,7 @@ const STORE_KEY = 'snow.lang';
 
 const DICT = {
   en: {
-    'doc.title': 'Snow · Realtime Snow — WebGPU / TSL',
+    'doc.title': 'COMRADE NOISE · Realtime Snow — WebGPU / TSL',
     'brand.name': 'Comrade Noise',
     'brand.sub': 'Realtime Snow · WebGPU + TSL',
 
@@ -102,7 +102,7 @@ const DICT = {
   },
 
   zh: {
-    'doc.title': '雪 · Realtime Snow — WebGPU / TSL',
+    'doc.title': 'COMRADE NOISE · Realtime Snow — WebGPU / TSL',
     'brand.name': 'Comrade Noise',   // 品牌名，中英一致
     'brand.sub': '实时雪景 · WebGPU + TSL',
 

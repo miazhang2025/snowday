@@ -1,0 +1,11 @@
+{
+  "name": "webgpu-snow",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Interactive photoreal snow weather system built with Three.js WebGPU + TSL",
+  "scripts": {
+    "dev": "npx --yes serve . -l 8123",
+    "start": "npx --yes serve . -l 8123"
+  }
+}

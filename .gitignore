@@ -1,0 +1,22 @@
+# ---------------------------------------------------------------- 素材源文件
+#
+# 8K 原始贴图和未压缩的 glb 只在本地跑 tools/optimize-glb.py 时需要，
+# 运行时用的全是 *.opt.glb。这些源文件里有两个超过 GitHub 的 100MB 硬上限
+# （rock1.glb 210MB、rock2.glb 135MB），提交进去 push 会被直接拒绝。
+#
+# 注意别改成用 Git LFS 绕过去：Vercel 默认不拉 LFS 对象，
+# 部署出来的会是一堆 130 字节的指针文件，加载器直接报错。
+assets/textures/
+assets/*.glb
+!assets/*.opt.glb
+
+# HDRI 源图（15MB）。上线用的是 tools/shrink-hdri.py 生成的 1K 版本。
+assets/winter_lake_01_4k.exr
+
+# 试验用的小文件
+assets/test-cube.gltf
+
+# ---------------------------------------------------------------- 本机配置
+.claude/
+node_modules/
+.DS_Store

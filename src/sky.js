@@ -322,8 +322,19 @@ export function createLights(scene, camera, renderer) {
   // 这个 shadow 是**模板**：CSM 会 clone 它给每一级，正交视锥的范围由 CSM 自己拟合
   sun.shadow.mapSize.set(SHADOW_MAP, SHADOW_MAP);
   sun.shadow.camera.near = 1;
-  sun.shadow.camera.far = 1400;
-  sun.shadow.bias = -0.0006;           // CSM 会按 bias × (级号+1) 逐级放大
+  sun.shadow.camera.far = 800;
+  // bias 一律 0，深度偏置完全不用。
+  //
+  // 这一条踩了很久才想明白：shadow.bias 是加在**归一化深度**上的，而正交阴影
+  // 相机的世界偏移 = bias × (far - near)。CSM 只设 left/right/top/bottom，
+  // near/far 是从这个模板继承的 —— 原来 far=1400，于是
+  //     第 0 级 −0.0006 × 1399 = −0.84 m
+  //     第 3 级 −0.0024 × 1399 = −3.36 m   （CSM 还会按 bias × (级号+1) 放大）
+  // 影子被整体推离物体好几米，全场都是「影子和脚不connected」的 peter-panning。
+  //
+  // 正确的做法是只用 normalBias：它的单位是**世界米**，跟深度范围无关，
+  // 也跟级号无关，各级按自己的纹素大小给就行（见下面 CASCADE_NB）。
+  sun.shadow.bias = 0;
   sun.shadow.normalBias = 0.035;
   scene.add(sun);
   scene.add(sun.target);
@@ -333,7 +344,7 @@ export function createLights(scene, camera, renderer) {
     maxFar: SHADOW_FAR,
     mode: 'custom',
     customSplitsCallback: (n, near, far, target) => { for (const f of SPLITS) target.push(f); },
-    lightMargin: 320,                  // 光源往后退这么多，别把高处的山头切掉
+    lightMargin: 150,                  // 光源往后退这么多，别把高处的山头切掉
   });
   csm.fade = true;                     // 级与级之间交叉淡入，不然接缝是一条硬线
   sun.shadow.shadowNode = csm;
@@ -343,7 +354,15 @@ export function createLights(scene, camera, renderer) {
   // 这样各级的灯和 shadow 对象在返回之前就存在了，下面 bindGodrayShadow 才有东西可指。
   // _init 里第一件事就是 this.camera = camera，所以之后 setup() 不会重复初始化。
   csm._init({ camera, renderer });
-  for (const lw of csm.lights) { scene.add(lw.target); scene.add(lw); }
+  // 逐级的法线偏置按各自的纹素大小给：纹素越大，越需要沿法线推开才不长痘。
+  // bias 保持 0（理由见上），CSM 的 bias × (级号+1) 因此也一直是 0。
+  const CASCADE_NB = [0.035, 0.09, 0.20, 0.40];   // ≈ 各级纹素的 1.8 倍
+  csm.lights.forEach((lw, i) => {
+    lw.shadow.bias = 0;
+    lw.shadow.normalBias = CASCADE_NB[i] ?? CASCADE_NB[CASCADE_NB.length - 1];
+    scene.add(lw.target);
+    scene.add(lw);
+  });
 
   // 间接光主要由 scene.environment 承担，这两盏只是很轻的补充：
   // 半球光补一点环境贴图给不到的近处地面反弹，环境光防止背光面死黑

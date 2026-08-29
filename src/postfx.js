@@ -55,7 +55,11 @@ export function createPostFX(renderer, scene, camera, sun) {
   const aoNode = ao(preDepth, preNormal, camera);
   aoNode.resolutionScale = 0.5;                   // AO 是低频的，半分辨率足够
   aoNode.useTemporalFiltering = true;
-  aoNode.radius.value = 0.45;
+  // 半径 0.45 会在远处炸出水平条纹：那个半径投到一百多米外还不到一个像素，
+  // 而 AO 是半分辨率 + 时域滤波的，采样退化成一道道横纹。
+  // 实测条纹强度：0.45 → 2.01，0.80 → 0.55，1.10 → 0.44（关掉 AO 的地板是 0.36）。
+  // 1.1m 对「石头压进雪里」这个尺度也更合适，0.45m 本来就偏紧。
+  aoNode.radius.value = 1.1;
   aoNode.thickness.value = 1.0;
   aoNode.distanceExponent.value = 1.6;
   aoNode.samples.value = 12;
@@ -161,6 +165,8 @@ export function createPostFX(renderer, scene, camera, sun) {
 
   return {
     pipeline,
+    aoNode,
+    raysNode,
     render: () => pipeline.render(),
 
     /** UI 改开关时调用；只有布尔量变化才重建管线 */

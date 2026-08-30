@@ -8,11 +8,31 @@
  */
 
 import { params, defaults, refresh, HAND, DAY_START, DAY_END } from './config.js';
+import { MOLDS } from './molds.js';
 import { t, getLang, otherLang, setLang, onLangChange, applyStatic } from './i18n.js';
 
 const $ = (s) => document.querySelector(s);
 
 const GROUPS = [
+  {
+    key: 'g.hand',
+    rows: [
+      { key: 'handSize', label: 's.handSize', min: 0.25, max: 2.6, step: 0.01, fmt: (v) => `${(v * 100).toFixed(0)} cm` },
+      { key: 'press', label: 's.press', min: 0.05, max: 1.5, step: 0.01, fmt: (v) => v.toFixed(2) },
+      { key: 'pile', label: 's.pile', min: 0, max: 2.2, step: 0.01, fmt: (v) => v.toFixed(2) },
+      { key: 'spray', label: 's.spray', min: 0, max: 1.5, step: 0.01, fmt: (v) => v.toFixed(2) },
+    ],
+  },
+  {
+    // 六个模具的按钮由 initUI 插在滑杆前面（moldPicker 这个标记）
+    key: 'g.mold',
+    moldPicker: true,
+    rows: [
+      { key: 'moldSize', label: 's.moldSize', min: 0.18, max: 1.8, step: 0.01, fmt: (v) => `${(v * 100).toFixed(0)} cm` },
+      { key: 'moldRot', label: 's.moldRot', min: 0, max: 360, step: 1, fmt: (v) => `${Math.round(v)}°` },
+      { key: 'moldFirm', label: 's.moldFirm', min: 0, max: 1, step: 0.01, fmt: pct },
+    ],
+  },
   {
     key: 'g.snowfall',
     rows: [
@@ -36,15 +56,6 @@ const GROUPS = [
       { key: 'crumble', label: 's.crumble', min: 0, max: 1.5, step: 0.01, fmt: (v) => v.toFixed(2) },
       { key: 'sss', label: 's.sss', min: 0, max: 1.5, step: 0.01, fmt: (v) => v.toFixed(2) },
       { key: 'sssDepth', label: 's.sssDepth', min: 0.2, max: 6, step: 0.05, fmt: (v) => `${v.toFixed(2)} m` },
-    ],
-  },
-  {
-    key: 'g.hand',
-    rows: [
-      { key: 'handSize', label: 's.handSize', min: 0.25, max: 2.6, step: 0.01, fmt: (v) => `${(v * 100).toFixed(0)} cm` },
-      { key: 'press', label: 's.press', min: 0.05, max: 1.5, step: 0.01, fmt: (v) => v.toFixed(2) },
-      { key: 'pile', label: 's.pile', min: 0, max: 2.2, step: 0.01, fmt: (v) => v.toFixed(2) },
-      { key: 'spray', label: 's.spray', min: 0, max: 1.5, step: 0.01, fmt: (v) => v.toFixed(2) },
     ],
   },
   {
@@ -100,12 +111,51 @@ export function initUI(actions) {
       : t(rec.key);
   };
 
+  // ---------------------------------------------------------- 分组折叠
+  //
+  // 七组四十来个滑杆，一屏早就放不下了。每组标题整条都是热区，点一下收起。
+  // 状态按组名存进 localStorage，刷新之后还是你上次留下的那个样子 ——
+  // 只关心「手上拿着什么」的人不该每次进来都先滚过一遍降雪和环境。
+
+  const GRP_KEY = 'snow.groups';
+  let folded = new Set();
+  try {
+    const raw = localStorage.getItem(GRP_KEY);
+    if (raw) folded = new Set(JSON.parse(raw));
+  } catch { /* 隐私模式，或者存的是旧格式 —— 当作全展开 */ }
+
   const addGroup = (key) => {
     const el = document.createElement('div');
     el.className = 'grp';
+    if (folded.has(key)) el.classList.add('collapsed');
+
+    // 标题文字单独放一个 span：applyLang 只改它，箭头才不会被 textContent 抹掉
     const h = document.createElement('h3');
+    const name = document.createElement('span');
+    const caret = document.createElement('i');
+    caret.className = 'caret';
+    caret.textContent = '▾';
+    h.append(name, caret);
+
+    const toggle = () => {
+      if (folded.has(key)) folded.delete(key); else folded.add(key);
+      el.classList.toggle('collapsed', folded.has(key));
+      try { localStorage.setItem(GRP_KEY, JSON.stringify([...folded])); } catch { /* 忽略 */ }
+    };
+    h.onclick = toggle;
+    // 键盘也要能用。这里必须 stopPropagation —— 否则空格会一路冒泡到
+    // window 上那个「开关降雪」的快捷键，收个面板顺手把雪停了。
+    h.setAttribute('role', 'button');
+    h.tabIndex = 0;
+    h.onkeydown = (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      e.stopPropagation();
+      toggle();
+    };
+
     el.appendChild(h);
-    groupEls.push({ el: h, key });
+    groupEls.push({ el: name, key });
     body.appendChild(el);
     return el;
   };
@@ -114,8 +164,9 @@ export function initUI(actions) {
 
   const gGroup = addGroup('g.gesture');
   const gBtns = document.createElement('div');
-  gBtns.className = 'btns';
-  [[HAND.PUSH, 'm.push', '1'], [HAND.SMOOTH, 'm.smooth', '2'], [HAND.PILE, 'm.pile', '3']]
+  gBtns.className = 'btns two';
+  [[HAND.PUSH, 'm.push', '1'], [HAND.SMOOTH, 'm.smooth', '2'],
+    [HAND.PILE, 'm.pile', '3'], [HAND.MOLD, 'm.mold', '4']]
     .forEach(([m, key, sc]) => {
       const b = mkBtn(key, sc, () => setMode(m));
       b.dataset.mode = m;
@@ -130,10 +181,38 @@ export function initUI(actions) {
     commit();
   }
 
+  // ---------------------------------------------------------- 模具选择
+  //
+  // 点一个模具就顺手切到模具模式 —— 不然得先按 4 再挑形状，白多一步。
+
+  const moldBtns = [];
+
+  function setMold(i) {
+    params.mold = i;
+    moldBtns.forEach((b) => b.classList.toggle('on', Number(b.dataset.mold) === i));
+    if (params.mode !== HAND.MOLD) setMode(HAND.MOLD);
+    else commit();
+  }
+
+  const buildMoldPicker = (el) => {
+    const row = document.createElement('div');
+    row.className = 'btns';
+    row.style.marginBottom = '9px';
+    row.classList.add('grid6');
+    MOLDS.forEach((m, i) => {
+      const b = mkBtn(m.key, '', () => setMold(i));
+      b.dataset.mold = i;
+      moldBtns.push(b);
+      row.appendChild(b);
+    });
+    el.appendChild(row);
+  };
+
   // ---------------------------------------------------------- 滑杆
 
   for (const g of GROUPS) {
     const el = addGroup(g.key);
+    if (g.moldPicker) buildMoldPicker(el);
 
     for (const r of g.rows) {
       const row = document.createElement('div');
@@ -242,6 +321,7 @@ export function initUI(actions) {
       s.paint();
     }
     modeBtns.forEach((b) => b.classList.toggle('on', Number(b.dataset.mode) === params.mode));
+    moldBtns.forEach((b) => b.classList.toggle('on', Number(b.dataset.mold) === params.mold));
     qualityBtns.forEach((b) => b.classList.toggle('on', Number(b.dataset.q) === params.quality));
     fxBtns.forEach((b) => b.classList.toggle('on', params[b.dataset.fx]));
     paintFallBtn();
@@ -272,9 +352,30 @@ export function initUI(actions) {
   let hintOpen = true;
   try { hintOpen = localStorage.getItem(HINT_KEY) !== '0'; } catch { /* 隐私模式 */ }
 
+  const shotBtn = $('#shotbtn');
+  let shotTimer = 0;
+
+  function paintShot(saved) {
+    shotBtn.textContent = t(saved ? 'b.photoSaved' : 'b.photo');
+    shotBtn.classList.toggle('on', !!saved);
+  }
+
+  /** 拍一张。快门要等几帧（让光标环的残影散掉），所以「已保存」由 main.js
+      在文件真的落地之后回调过来 —— 点完就报成功是在撒谎，帧率低时差好几秒。 */
+  function doShot() {
+    actions.onShot?.((ok) => {
+      if (!ok) return;
+      paintShot(true);
+      clearTimeout(shotTimer);
+      shotTimer = setTimeout(() => paintShot(false), 1500);
+    });
+  }
+  shotBtn.onclick = doShot;
+
   function paintHint() {
     hintWrap.classList.toggle('collapsed', !hintOpen);
     hintBtn.textContent = hintOpen ? t('hint.hide') : t('hint.show');
+    paintShot(false);
   }
   hintBtn.onclick = () => {
     hintOpen = !hintOpen;
@@ -288,6 +389,7 @@ export function initUI(actions) {
   const togglePanel = (v) => {
     panel.classList.toggle('hidden', !v);
     showBtn.classList.toggle('show', !v);
+    document.body.classList.toggle('panel-hidden', !v);
   };
   $('#hideui').onclick = () => togglePanel(false);
   showBtn.onclick = () => togglePanel(true);
@@ -297,13 +399,22 @@ export function initUI(actions) {
   window.addEventListener('keydown', (e) => {
     if (e.target instanceof HTMLInputElement) return;
     const k = e.key.toLowerCase();
+    const molding = params.mode === HAND.MOLD;
     if (k === '1') setMode(HAND.PUSH);
     else if (k === '2') setMode(HAND.SMOOTH);
     else if (k === '3') setMode(HAND.PILE);
+    else if (k === '4') setMode(HAND.MOLD);
+    else if (k === 'm') setMold((params.mold + 1) % MOLDS.length);
+    else if (k === ',' || k === '<') { params.moldRot = (params.moldRot + 345) % 360; syncAll(); commit(); }
+    else if (k === '.' || k === '>') { params.moldRot = (params.moldRot + 15) % 360; syncAll(); commit(); }
     else if (k === 'c') actions.onFill(0);
     else if (k === 'f') actions.onFill(params.depth);
     else if (k === 'r') actions.onResetView();
+    else if (k === 'p') doShot();
     else if (k === 'h') togglePanel(panel.classList.contains('hidden'));
+    // 拿着模具的时候 [ ] 调的是模具大小 —— 手不在场上，调手掌没有意义
+    else if (k === '[' && molding) { params.moldSize = Math.max(0.18, params.moldSize - 0.08); syncAll(); commit(); }
+    else if (k === ']' && molding) { params.moldSize = Math.min(1.8, params.moldSize + 0.08); syncAll(); commit(); }
     else if (k === '[') { params.handSize = Math.max(0.25, params.handSize - 0.1); syncAll(); commit(); }
     else if (k === ']') { params.handSize = Math.min(2.6, params.handSize + 0.1); syncAll(); commit(); }
     else if (k === ' ') {
@@ -320,5 +431,5 @@ export function initUI(actions) {
   syncAll();
   applyLang();
 
-  return { syncAll, setMode, applyLang };
+  return { syncAll, setMode, setMold, applyLang };
 }

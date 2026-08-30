@@ -12,11 +12,13 @@ const STORE_KEY = 'snow.lang';
 
 const DICT = {
   en: {
-    'doc.title': 'COMRADE NOISE · Realtime Snow — WebGPU / TSL',
+    'doc.title': 'Snow Day · Build a Snowman — WebGPU',
     'brand.name': 'Comrade Noise',
-    'brand.sub': 'Realtime Snow · WebGPU + TSL',
+    'brand.sub': 'Play in the snow · WebGPU',
+    'brand.blurb': 'Push the snow around, press a snowman out of a mold, build a castle. '
+      + 'Every flake, footprint and shadow is simulated live on your GPU.',
 
-    'boot.tip': 'Starting the WebGPU pipeline',
+    'boot.tip': 'Letting it snow — starting WebGPU',
     'boot.nogpu': 'This page needs <b>WebGPU</b>.<br/>Open it in Chrome / Edge 113+ or Safari 18+, '
       + 'and make sure hardware acceleration is on.<br/>'
       + '<span style="opacity:.7">Firefox needs dom.webgpu.enabled in about:config.</span>',
@@ -31,25 +33,40 @@ const DICT = {
     'hint.toggle': 'Show / hide controls',
     'hint.show': 'Controls',
     'hint.hide': 'Hide',
+    'hint.photo': 'Save a PNG of the view (P)',
+    'b.photo': '◉ Photo',
+    'b.photoSaved': '✓ Saved',
 
     'hint.html':
       '<em>Drag left</em> push snow &nbsp;·&nbsp; <em>Click</em> handprint &nbsp;·&nbsp; '
       + '<em>Right-drag</em> orbit &nbsp;·&nbsp; <em>Middle</em> pan &nbsp;·&nbsp; <em>Wheel</em> zoom<br/>'
+      + '<em>Mold</em> click to press a shape, drag to lay a row, place on top to stack<br/>'
       + '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk &nbsp; <kbd>Q</kbd><kbd>E</kbd> down / up '
       + '&nbsp; <kbd>shift</kbd> sprint<br/>'
-      + '<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> push / smooth / pile &nbsp; <kbd>[</kbd><kbd>]</kbd> hand '
-      + '&nbsp; <kbd>C</kbd> clear &nbsp; <kbd>F</kbd> fill &nbsp; <kbd>space</kbd> snowfall &nbsp; <kbd>H</kbd> panel',
+      + '<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> push / smooth / pile &nbsp; <kbd>4</kbd> mold '
+      + '&nbsp; <kbd>M</kbd> next mold &nbsp; <kbd>,</kbd><kbd>.</kbd> turn &nbsp; <kbd>[</kbd><kbd>]</kbd> size<br/>'
+      + '<kbd>C</kbd> clear &nbsp; <kbd>F</kbd> fill &nbsp; <kbd>space</kbd> snowfall '
+      + '&nbsp; <kbd>P</kbd> photo &nbsp; <kbd>H</kbd> panel',
 
     'g.gesture': 'Gesture',
     'g.snowfall': 'Snowfall',
     'g.accum': 'Accumulation',
     'g.hand': 'Hand',
+    'g.mold': 'Snow molds',
     'g.env': 'Environment',
     'g.actions': 'Actions',
 
     'm.push': 'Push',
     'm.smooth': 'Smooth',
     'm.pile': 'Pile',
+    'm.mold': 'Mold',
+
+    'mold.ball': 'Ball',
+    'mold.tower': 'Tower',
+    'mold.wall': 'Wall',
+    'mold.igloo': 'Igloo',
+    'mold.spire': 'Spire',
+    'mold.star': 'Star',
 
     's.intensity': 'Intensity',
     's.flakeSize': 'Flake size',
@@ -70,6 +87,9 @@ const DICT = {
     's.press': 'Press strength',
     's.pile': 'Push pile-up',
     's.spray': 'Powder spray',
+    's.moldSize': 'Mold size',
+    's.moldRot': 'Facing',
+    's.moldFirm': 'Packing',
     's.timeOfDay': 'Time of day',
     's.overcast': 'Overcast',
     's.fog': 'Fog',
@@ -102,11 +122,13 @@ const DICT = {
   },
 
   zh: {
-    'doc.title': 'COMRADE NOISE · Realtime Snow — WebGPU / TSL',
+    'doc.title': '下雪天 · 堆个雪人 —— WebGPU',
     'brand.name': 'Comrade Noise',   // 品牌名，中英一致
-    'brand.sub': '实时雪景 · WebGPU + TSL',
+    'brand.sub': '来玩雪 · WebGPU',
+    'brand.blurb': '推推雪，用模具扣个雪人，再搭座城堡。'
+      + '每一片雪、每一道脚印、每一块阴影，都是显卡当场算出来的。',
 
-    'boot.tip': '正在启动 WebGPU 渲染管线',
+    'boot.tip': '正在落雪 —— 启动 WebGPU',
     'boot.nogpu': '这个页面需要 <b>WebGPU</b>。<br/>请用 Chrome / Edge 113+ 或 Safari 18+ 打开，'
       + '并确认没有关闭硬件加速。<br/>'
       + '<span style="opacity:.7">Firefox 需要在 about:config 里开启 dom.webgpu.enabled。</span>',
@@ -121,25 +143,40 @@ const DICT = {
     'hint.toggle': '展开 / 收起操作说明',
     'hint.show': '操作说明',
     'hint.hide': '收起',
+    'hint.photo': '把当前画面存成 PNG（P）',
+    'b.photo': '◉ 拍照',
+    'b.photoSaved': '✓ 已保存',
 
     'hint.html':
       '<em>左键拖动</em> 推雪 &nbsp;·&nbsp; <em>轻点</em> 手印 &nbsp;·&nbsp; <em>右键拖动</em> 转视角 '
       + '&nbsp;·&nbsp; <em>中键</em> 平移 &nbsp;·&nbsp; <em>滚轮</em> 缩放<br/>'
+      + '<em>模具</em> 点一下扣一坨雪，按住拖着走连成一排，扣在已有的东西上就是往上摞<br/>'
       + '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 走动 &nbsp; <kbd>Q</kbd><kbd>E</kbd> 升 / 降 '
       + '&nbsp; <kbd>shift</kbd> 加速<br/>'
-      + '<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 推雪 / 抚平 / 堆雪 &nbsp; <kbd>[</kbd><kbd>]</kbd> 手掌 '
-      + '&nbsp; <kbd>C</kbd> 清空 &nbsp; <kbd>F</kbd> 铺满 &nbsp; <kbd>space</kbd> 降雪 &nbsp; <kbd>H</kbd> 面板',
+      + '<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 推雪 / 抚平 / 堆雪 &nbsp; <kbd>4</kbd> 模具 '
+      + '&nbsp; <kbd>M</kbd> 换模具 &nbsp; <kbd>,</kbd><kbd>.</kbd> 转向 &nbsp; <kbd>[</kbd><kbd>]</kbd> 大小<br/>'
+      + '<kbd>C</kbd> 清空 &nbsp; <kbd>F</kbd> 铺满 &nbsp; <kbd>space</kbd> 降雪 '
+      + '&nbsp; <kbd>P</kbd> 拍照 &nbsp; <kbd>H</kbd> 面板',
 
     'g.gesture': '手势',
     'g.snowfall': '降雪',
     'g.accum': '积雪',
     'g.hand': '手',
+    'g.mold': '雪模具',
     'g.env': '环境',
     'g.actions': '操作',
 
     'm.push': '推雪',
     'm.smooth': '抚平',
     'm.pile': '堆雪',
+    'm.mold': '模具',
+
+    'mold.ball': '雪球',
+    'mold.tower': '塔楼',
+    'mold.wall': '城墙',
+    'mold.igloo': '雪屋',
+    'mold.spire': '尖塔',
+    'mold.star': '星形',
 
     's.intensity': '降雪强度',
     's.flakeSize': '雪花大小',
@@ -160,6 +197,9 @@ const DICT = {
     's.press': '按压力度',
     's.pile': '推雪堆积',
     's.spray': '扬起粉雪',
+    's.moldSize': '模具大小',
+    's.moldRot': '朝向',
+    's.moldFirm': '压实程度',
     's.timeOfDay': '时间',
     's.overcast': '阴天程度',
     's.fog': '雾浓度',

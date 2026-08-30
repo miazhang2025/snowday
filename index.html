@@ -3,7 +3,19 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>COMRADE NOISE · Realtime Snow — WebGPU / TSL</title>
+<title>Snow Day · Build a Snowman — WebGPU</title>
+<meta name="description" content="A quiet place to play in the snow. Push it around by hand, press snowmen and castle walls out of molds, leave tracks across a winter valley — live on WebGPU." />
+<meta name="theme-color" content="#18191C" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="Snow Day · Build a Snowman" />
+<meta property="og:description" content="A quiet place to play in the snow. Press snowmen, towers and castle walls out of molds and leave tracks across a winter valley — running live on WebGPU." />
+<meta property="og:image" content="/assets/og-image.jpg" />
+<meta property="og:image:type" content="image/jpeg" />
+<meta property="og:image:width" content="1920" />
+<meta property="og:image:height" content="1080" />
+<meta property="og:image:alt" content="A snow-covered valley at dusk with pines, rocks and a drift of packed snow, under the words Comrade Noise." />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:image" content="/assets/og-image.jpg" />
 <link rel="preconnect" href="https://cdn.jsdelivr.net" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -51,14 +63,31 @@
     display:flex;flex-direction:column;align-items:flex-start;gap:9px;
     max-width:min(780px,64vw);
   }
-  #hintwrap{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
-  #hinttoggle{
+  /* ---------------------------------------------------------- 右下 */
+  /* 控制面板占满了右边一整条，所以这里默认往左让开它 326px + 12px 的间距；
+     面板收起时（body.panel-hidden 由 ui.js 打上）再贴回最右边。
+     让位用 transform 而不是 right：right 每帧都要重排，而这个页面的主线程
+     一直被渲染循环占着，掉帧时那段动画会一卡一卡的；transform 走合成器，
+     不碰布局。命中区域跟着 transform 走，按钮照样点得到。 */
+  #bottomright{
+    position:fixed;right:18px;bottom:18px;z-index:20;pointer-events:none;
+    display:flex;flex-direction:column;align-items:flex-end;gap:9px;
+    max-width:min(760px,52vw);
+    transform:translateX(-338px);
+    transition:transform .38s cubic-bezier(.4,0,.2,1);
+  }
+  body.panel-hidden #bottomright{transform:none}
+
+  #hintwrap{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+  .cornerbtns{display:flex;gap:6px}
+  .cornerbtn{
     pointer-events:auto;cursor:pointer;border:1px solid var(--ink);
     background:rgba(219,219,210,.92);color:var(--ink);
     font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.16em;
-    text-transform:uppercase;padding:4px 9px 3px;line-height:1.2;
+    text-transform:uppercase;padding:4px 9px 3px;line-height:1.2;white-space:nowrap;
   }
-  #hinttoggle:hover{background:var(--paper);border-color:var(--red);color:var(--red)}
+  .cornerbtn:hover{background:var(--paper);border-color:var(--red);color:var(--red)}
+  .cornerbtn.on{background:var(--paper);border-color:var(--red);color:var(--red)}
   #hint{
     letter-spacing:.06em;line-height:1.72;text-transform:none;
     padding:8px 12px 7px;transition:opacity .3s;
@@ -108,7 +137,20 @@
     font-family:var(--mono);font-size:12px;font-weight:700;
     letter-spacing:.17em;text-transform:uppercase;color:var(--ink);
     border-bottom:1.5px solid var(--red);
+    display:flex;align-items:baseline;justify-content:space-between;gap:8px;
+    cursor:pointer;user-select:none;
   }
+  .grp>h3:hover{color:var(--red)}
+  .grp>h3:focus-visible{outline:1px solid var(--red);outline-offset:2px}
+  .grp>h3 .caret{
+    font-style:normal;font-size:9px;letter-spacing:0;opacity:.45;
+    transition:transform .18s;transform-origin:50% 45%;
+  }
+  .grp>h3:hover .caret{opacity:.9}
+  /* 收起时只留标题，底边距一并收掉，免得留一条空档 */
+  .grp.collapsed>h3{margin-bottom:0}
+  .grp.collapsed>h3 .caret{transform:rotate(-90deg)}
+  .grp.collapsed>*:not(h3){display:none}
 
   /* ---------------------------------------------------------- 滑杆 */
   .row{margin-bottom:9px}
@@ -141,6 +183,12 @@
   .btns{display:grid;grid-template-columns:repeat(3,1fr)}
   .btns.two{grid-template-columns:repeat(2,1fr)}
   .btns button + button{margin-left:-1px}
+  /* 折行的按钮组（手势 4 个、模具 6 个）：行与行之间也要并边框，
+     而且每行第一个不能再往左缩，否则会顶出网格 */
+  .btns.two button:nth-child(2n+1){margin-left:0}
+  .btns.two button:nth-child(n+3){margin-top:-1px}
+  .btns.grid6 button:nth-child(3n+1){margin-left:0}
+  .btns.grid6 button:nth-child(n+4){margin-top:-1px}
   button{
     font-family:var(--mono);font-size:11px;letter-spacing:.11em;text-transform:uppercase;
     color:var(--ink);background:transparent;border:1px solid var(--line);
@@ -187,6 +235,12 @@
     margin:0;font-family:var(--mono);font-size:11px;letter-spacing:.2em;
     text-transform:uppercase;color:rgba(219,219,210,.55);
   }
+  /* 一句话说清这是个什么地方 —— 加载那几秒是唯一有人会读字的时候 */
+  #boot .blurb{
+    max-width:480px;padding:0 24px;text-align:center;
+    font-size:13px;line-height:1.9;letter-spacing:.03em;
+    text-transform:none;color:rgba(219,219,210,.74);
+  }
   .bar{width:196px;height:2px;background:rgba(219,219,210,.16);overflow:hidden}
   .bar i{display:block;height:100%;width:34%;background:var(--red);animation:sweep 1.15s ease-in-out infinite}
   @keyframes sweep{0%{transform:translateX(-110%)}100%{transform:translateX(400%)}}
@@ -194,12 +248,14 @@
     display:none;max-width:520px;text-align:center;color:#E8A08C;
     font-family:var(--mono);font-size:12px;line-height:1.9;letter-spacing:.04em;text-transform:none;
   }
-  #boot.failed .bar,#boot.failed p.tip{display:none}
+  /* 出错的时候只留报错，别让宣传语抢戏 */
+  #boot.failed .bar,#boot.failed p.tip,#boot.failed .blurb{display:none}
   #boot.failed .err{display:block}
 
   @media (max-width:900px){
     #ui{width:calc(100vw - 28px);top:auto;bottom:12px;right:14px;left:14px;max-height:52vh}
-    #bottomleft{display:none}
+    /* 窄屏上面板本来就压着整个下半屏，两个角落都没地方站 */
+    #bottomleft,#bottomright{display:none}
 
   }
 </style>
@@ -213,8 +269,14 @@
 
 <div id="bottomleft">
   <div id="brand"><b data-i18n="brand.name">Comrade Noise</b></div>
+</div>
+
+<div id="bottomright">
   <div id="hintwrap">
-    <button id="hinttoggle" data-i18n-title="hint.toggle">?</button>
+    <div class="cornerbtns">
+      <button id="shotbtn" class="cornerbtn" data-i18n-title="hint.photo"></button>
+      <button id="hinttoggle" class="cornerbtn" data-i18n-title="hint.toggle">?</button>
+    </div>
     <div class="chip" id="hint" data-i18n="hint.html"></div>
   </div>
 </div>
@@ -234,6 +296,7 @@
 
 <div id="boot">
   <h1 data-i18n="brand.name">Comrade Noise</h1>
+  <p class="blurb" data-i18n="brand.blurb"></p>
   <p class="tip" data-i18n="boot.tip"></p>
   <div class="bar"><i></i></div>
   <div class="err" id="booterr"></div>

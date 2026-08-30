@@ -50,7 +50,14 @@ export const SKY_TOP = 15;               // 雪花出生高度（相对当前地
 export const FIELD_R = GROUND * 0.62;    // 降雪覆盖半径（跟着相机走）
 
 // 手势
-export const HAND = { PUSH: 0, SMOOTH: 1, PILE: 2, PRINT: 3 };
+export const HAND = { PUSH: 0, SMOOTH: 1, PILE: 2, PRINT: 3, MOLD: 4 };
+
+// 高度场的天花板（米）。原来是「目标雪深 x 3.5」，也就是二十几厘米 ——
+// 那是给手堆的小雪堆定的，模具一上来就顶穿了：computeDeform 是**逐格无条件**
+// 写回的，钳制会作用于整个 L0，于是随便推一下雪，场上所有城堡就被齐刷刷
+// 削平到那个高度。所以钳制取「雪深推出来的值」和这个常数里更大的那个。
+// 5m 是「最高的模具（塔楼 2.58）开到最大尺度 1.8」再留一点余量。
+export const BUILD_CEIL = 5.0;
 
 // ---------------------------------------------------------------- 可调参数
 
@@ -81,6 +88,12 @@ export const params = {
   pile: 0.6,            // 推雪堆积量
   spray: 0.3,           // 扬起的粉雪量
   mode: HAND.PUSH,      // 当前手势
+
+  // 模具
+  mold: 0,              // 当前模具（molds.js 里 MOLDS 的下标）
+  moldSize: 0.55,       // 模具尺度（米，约等于底面半径）
+  moldRot: 0,           // 在「背对镜头」之外再转多少度
+  moldFirm: 0.85,       // 压得多实 —— 越实越挺得住，0 则和松雪一样会塌
 
   // 环境
   timeOfDay: 0.76,      // 0..1（午后斜阳，影子最长）
@@ -150,6 +163,18 @@ export const U = {
   handStrength:  uniform(0),   // 这一帧实际作用强度（含 dt）
   handActive:    uniform(0),   // 是否显示光标环
   handMode:      uniform(0),
+
+  // 模具
+  moldPos:       uniform(new THREE.Vector3()),      // 世界坐标的落点
+  moldAxis:      uniform(new THREE.Vector2(0, 1)),  // 朝向（单位向量，xz）
+  moldBase:      uniform(0),                        // 模具 y=0 那一面的绝对高度
+  moldScale:     uniform(0.55),                     // 归一化单位 -> 米
+  moldType:      uniform(0),
+  moldActive:    uniform(0),                        // 是否画预览轮廓
+  // 压实的雪能挺住多陡的坡。松雪的休止角只有三十几度，塔一堆好就塌了；
+  // 手压过的雪能立成墙，这是模具扣出来的东西能站住的**唯一**原因，所以直接乘在休止角上。
+  packRepose:    uniform(16),
+  buildCeil:     uniform(BUILD_CEIL),
 
   // 雪花
   wind:          uniform(new THREE.Vector3()),
@@ -271,6 +296,11 @@ export function refresh() {
   U.handPress.value = p.press * 0.55;
   U.handPile.value = p.pile;
   U.handMode.value = p.mode;
+
+  // --- 模具 -------------------------------------------------------
+  U.moldScale.value = p.moldSize;
+  U.moldType.value = p.mold;
+  U.packRepose.value = 1.5 + p.moldFirm * 20.0;
 
   // --- 环境 -------------------------------------------------------
   const s = lerpKeys(p.timeOfDay);

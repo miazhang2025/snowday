@@ -173,6 +173,7 @@ async function init() {
     onChange: applySettings,
     onFill: (v) => fillSnow(v),
     onResetView: resetView,
+    onShot: takeShot,
     onQuality: (q) => renderer.setPixelRatio(pixelRatioFor(q)),
   });
 
@@ -306,6 +307,61 @@ function resetView() {
   controls.update();
 }
 
+// ---------------------------------------------------------------- 拍照
+//
+// 存的是 canvas 本身，所以面板、说明、品牌字这些 DOM 一个都不会进画面 ——
+// 按下就是一张干净的风景照。
+//
+// 但光标环和模具预览是画在雪面着色里的，DOM 那一刀切不掉，得先把它们灭了。
+// 麻烦在 TRAA：它是攒历史帧的，当帧灭掉之后画面里还留着九成的残影，
+// 直接按快门反而比不灭更难看。所以灭掉之后空跑几帧，等历史冲干净再按。
+// 8 帧在 60fps 下是 130ms，按下去察觉不到。
+const SHOT_SETTLE = 8;
+let shotFrames = 0;
+let shotDone = null;
+
+/**
+ * 请求拍一张。真正的快门在主循环里按（见 animate），存完再回调 ——
+ * 面板那边要等这一声才敢显示「已保存」。帧率低的时候这中间能差上好几秒，
+ * 点完就报「已保存」是在撒谎。
+ */
+function takeShot(done) {
+  if (shotFrames > 0) return;        // 上一张还没落地，别叠
+  shotFrames = SHOT_SETTLE;
+  shotDone = done || null;
+}
+
+function saveFrame() {
+  // toBlob 是在**调用的这一刻**对画面取样的，回调只是拿结果，
+  // 所以必须紧跟在 postfx.render() 后面、同一个 rAF 里调。
+  renderer.domElement.toBlob((blob) => {
+    if (!blob) {
+      console.warn('[snow] 截图失败：读不出画面');
+      shotDone?.(false);
+      shotDone = null;
+      return;
+    }
+    const d = new Date();
+    const p2 = (n) => String(n).padStart(2, '0');
+    const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}`
+      + `-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
+    // 锚点必须真的挂进文档里再点。游离节点上的 download 在 Chrome 上多数时候
+    // 能work，但 Safari / Firefox 会直接吞掉，排查起来毫无线索（什么都不发生）。
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `comrade-noise-${stamp}.png`;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    console.info(`[snow] 已保存 ${a.download}（${(blob.size / 1e6).toFixed(2)}MB）`);
+    shotDone?.(true);
+    shotDone = null;
+  }, 'image/png');
+}
+
 // ---------------------------------------------------------------- 走动
 //
 // clipmap 的意义要能走起来才看得出来，所以给一套 WASD：
@@ -399,8 +455,21 @@ function animate() {
   renderer.compute(computeFlakeUpdate);
   renderer.compute(computeSprayUpdate);
 
+  // 快门期间把光标环和模具预览按掉（见 takeShot 那段注释）
+  const shooting = shotFrames > 0;
+  const keepHand = U.handActive.value;
+  const keepMold = U.moldActive.value;
+  if (shooting) { U.handActive.value = 0; U.moldActive.value = 0; }
+
   maybeBakeEnv();
   postfx.render();
+
+  if (shooting) {
+    U.handActive.value = keepHand;
+    U.moldActive.value = keepMold;
+    shotFrames -= 1;
+    if (shotFrames === 0) saveFrame();
+  }
 
   // FPS + GPU 计时
   fpsAcc += dt; fpsCnt++;

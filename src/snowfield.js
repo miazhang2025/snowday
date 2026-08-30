@@ -39,6 +39,7 @@ import {
 } from './config.js';
 import { terrainSample } from './terrain.js';
 import { groundAlbedo, groundNormalXY, groundRough } from './ground.js';
+import { moldLocal, moldShape } from './molds.js';
 
 // ---------------------------------------------------------------- 通用小工具
 
@@ -102,6 +103,16 @@ export const noised = (p) => {
 
 /** 1 = 完全在里面, 0 = 在半径外（feather 是过渡宽度） */
 const insideOf = (d, r, feather) => float(1).sub(smoothstep(float(r).sub(feather), float(r), d));
+
+/**
+ * 多项式软最大值：两坨雪并起来的时候，接缝处长出一个半径约 k 的圆角。
+ * 模具扣下去的雪和周围的雪就是靠它长在一起的 —— 硬 max 会留下一圈刀切的
+ * 直角，一眼就看出是「贴上去的」，而不是「堆出来的」。
+ */
+const smaxN = (a, b, k) => {
+  const e = float(k).sub(a.sub(b).abs()).max(0).div(k);
+  return a.max(b).add(e.mul(e).mul(k * 0.25));
+};
 
 /** 点到线段的距离（vec2） */
 const segDist = (p, a, b) => {
@@ -335,6 +346,16 @@ function createLevel(k, coarse) {
   // ---------------------------------------------------------------- 松弛
   // 超过休止角的坡度会塌落（反对称流量 → 质量守恒），并做轻微自平整。
   // 阈值是「坡度 x 格子尺寸」，所以三级用同一个休止角，塌出来的坡形是一致的。
+  //
+  // 但松雪的休止角只有三十几度 —— 照这个来，模具扣出来的塔一秒就摊成饼了，
+  // 雪球也留不住形。现实里雪人和雪砖能站住是因为**雪被压实了**：压过的雪
+  // 颗粒之间烧结咬合，能立成垂直的墙，这正是造雪砖、修雪洞的物理基础。
+  //
+  // 压实度本来就有一个通道（packed），直接拿它去抬休止角就行，不用新加缓冲。
+  // 判据卡得极紧（0.955 往上才算「夯实」）是**有意**的：模具在轮廓内部写的是
+  // 整 1.0，而手堆的雪是 0.7、手推的雪堤是 0.5 上下、手印是 0.95 ——
+  // 全都落在门槛外面。于是徒手玩雪的手感一点没动过（手印照样会慢慢软下去），
+  // 只有模具扣出来的东西挺得住。
   const computeRelax = Fn(() => {
     const h = height.element(instanceIndex);
     const hL = at(height, cgx.sub(1), cgy);
@@ -342,14 +363,18 @@ function createLevel(k, coarse) {
     const hD = at(height, cgx, cgy.sub(1));
     const hU = at(height, cgx, cgy.add(1));
 
-    const thr = U.reposeSlope.mul(cell);
+    const firm = smoothstep(0.955, 1.0, packed.element(instanceIndex).clamp(0, 1));
+
+    const thr = U.reposeSlope.mul(cell).mul(float(1).add(firm.mul(U.packRepose)));
     const flux = (d) => d.sign().mul(d.abs().sub(thr).max(0));
     const flow = flux(h.sub(hL)).add(flux(h.sub(hR))).add(flux(h.sub(hD))).add(flux(h.sub(hU)));
-    const kk = U.slumpRate.mul(U.dt).mul(0.22).min(0.24);
+    const kk = U.slumpRate.mul(U.dt).mul(0.22).min(0.24).mul(float(1).sub(firm.mul(0.92)));
     const slumped = h.sub(flow.mul(kk));
 
     const avg = hL.add(hR).add(hD).add(hU).mul(0.25);
-    const sm = U.smoothRate.mul(U.dt).min(0.35);
+    // 自平整也一起压下去，否则棱角会在几秒里被磨圆。留 5% —— 堆好的东西
+    // 随时间极缓慢地塌软一点，正是雪该有的样子。
+    const sm = U.smoothRate.mul(U.dt).min(0.35).mul(float(1).sub(firm.mul(0.95)));
 
     height2.element(instanceIndex).assign(mix(slumped, avg, sm).max(0));
   })().compute(CELLS);
@@ -474,7 +499,10 @@ function createLevel(k, coarse) {
         nh.assign(printH); np.assign(printP); touch.assign(prof);
       });
 
-      const ceil = U.targetDepth.mul(3.5).add(0.10);
+      // 注意这个 pass 是**逐格无条件写回**的，所以钳制作用于整个 L0，
+      // 不只是手底下那一块。天花板压到雪深那一档的话，随便推一下雪，
+      // 场上所有堆好的东西都会被齐刷刷削平 —— 所以取 buildCeil 兜底。
+      const ceil = U.targetDepth.mul(3.5).add(0.10).max(U.buildCeil);
       const outH = nh.clamp(0, ceil);
       height.element(instanceIndex).assign(outH);
       surf.element(instanceIndex).assign(terrainSample(w).x.add(outH));
@@ -483,6 +511,63 @@ function createLevel(k, coarse) {
       crust.element(instanceIndex).assign(cr0.mul(float(1).sub(touch.clamp(0, 1))).clamp(0, 1));
       const tc0 = touchBuf.element(instanceIndex);
       touchBuf.element(instanceIndex).assign(tc0.max(touch.clamp(0, 1)).clamp(0, 1));
+    })().compute(CELLS);
+  }
+
+  // ---------------------------------------------------------------- 模具（也只有 L0）
+  //
+  // 一次性的「盖章」：把 molds.js 里那个归一化的高度剖面按当前的落点 / 朝向 /
+  // 尺度摆好，和已有的雪做**软并集**。
+  //
+  // 三件事让它看起来是「堆出来的」而不是「贴上去的」：
+  //
+  //   1. 软并集。接缝处长出一个 5cm 的圆角，模具的脚自然埋进周围的雪里。
+  //      硬 max 会留一圈刀切的直角，一眼就穿帮。
+  //   2. 抖动 + 起伏。局部坐标先被噪声推开一点（轮廓不再是完美的圆），
+  //      高度再叠两层噪声（表面不再是数学曲面）。手拍出来的雪就是这样。
+  //   3. 压实度写满。于是它在着色上走「压实雪」那一档 —— 偏蓝、更致密、
+  //      不闪冰晶、没有风壳；同时休止角被抬高，塔才立得住（见 computeRelax）。
+  //
+  // 高度是**绝对**的：moldBase 是模具 y=0 那一面的世界高度，减掉本格的地形
+  // 才是雪深。这样斜坡上扣出来的塔是竖直的，不会跟着坡被剪切。
+  let computeMold = null;
+  if (isFine) {
+    computeMold = Fn(() => {
+      const w = cw;
+
+      // 轮廓抖动：一格出头的量，刚好把「机器切出来的边」揉掉又不糊掉造型
+      const jx = noised(w.mul(14.0)).x.sub(0.5);
+      const jz = noised(w.mul(14.0).add(vec2(51.7, 19.3))).x.sub(0.5);
+      const sh = moldShape(moldLocal(w).add(vec2(jx, jz).mul(0.05)));
+
+      // 在轮廓里面 且 这一点确实有高度（雪屋的门廊之外、星形的凹角之外都不算）
+      const mask = float(1).sub(smoothstep(-0.02, 0.015, sh.y))
+        .mul(smoothstep(0.0, 0.025, sh.x))
+        .clamp(0, 1);
+
+      const lumps = noised(w.mul(8.0)).x.sub(0.5).mul(0.055)
+        .add(noised(w.mul(29.0)).x.sub(0.5).mul(0.016));
+
+      const ty = terrainSample(w).x.toVar();
+      const h0 = height.element(instanceIndex);
+      const want = U.moldBase.add(sh.x.mul(U.moldScale)).add(lumps.mul(mask)).sub(ty).max(0);
+
+      const nh = mix(h0, smaxN(h0, want, 0.05), mask).clamp(0, U.buildCeil);
+      height.element(instanceIndex).assign(nh);
+      surf.element(instanceIndex).assign(ty.add(nh));
+
+      // 夯实：轮廓内部把压实度写满 1.0。它同时管着色（压实雪偏蓝、更致密、
+      // 不闪冰晶、没有风壳）和休止角（见 computeRelax 里那道 0.955 的门槛）。
+      // 「压得多实」由 U.packRepose 一个人调，这里必须是整 1.0 ——
+      // 写成 0.98 就踩在门槛边上，塌不塌全看噪声，非常难查。
+      const p0 = packed.element(instanceIndex);
+      packed.element(instanceIndex).assign(p0.max(mask).clamp(0, 1));
+      const cr0 = crust.element(instanceIndex);
+      crust.element(instanceIndex).assign(cr0.mul(float(1).sub(mask)).clamp(0, 1));
+
+      // 记进「碰过」通道 —— 形变留存只存碰过的格子，走开再回来城堡还在
+      const tc0 = touchBuf.element(instanceIndex);
+      touchBuf.element(instanceIndex).assign(tc0.max(mask).clamp(0, 1));
     })().compute(CELLS);
   }
 
@@ -570,7 +655,8 @@ function createLevel(k, coarse) {
     height, packed, crust, surf, lightB,
     oc, ocx, ocy, touchBuf,
     at, bufOf, cl, worldOf, surfAt, lightAt, insideWindow,
-    computeRefresh, computeFill, computeRelax, computeAccumulate, computeDeform, computeLighting,
+    computeRefresh, computeFill, computeRelax, computeAccumulate,
+    computeDeform, computeMold, computeLighting,
     mesh: null,
   };
   L.material = snowMaterial(L);
@@ -783,10 +869,10 @@ function snowMaterial(L) {
 
     c = mix(ground, c, cover);
 
-    // 手掌本身在雪上的柔和投影
+    // 手掌本身在雪上的柔和投影（拿模具的时候手不在场上，投影也就不该有）
     const dh = positionWorld.xz.distance(U.handCur.xz);
     const sh = float(1).sub(smoothstep(U.handRadius.mul(0.15), U.handRadius.mul(1.55), dh))
-      .mul(0.18).mul(U.handActive);
+      .mul(0.18).mul(U.handActive).mul(float(1).sub(U.moldActive));
     return c.mul(float(1).sub(sh)).mul(float(1).sub(U.debugMode.clamp(0, 1)));
   })();
 
@@ -955,8 +1041,23 @@ function snowMaterial(L) {
     const dh = positionWorld.xz.distance(U.handCur.xz);
     const R = U.handRadius;
     const ring = smoothstep(R.mul(0.90), R.mul(0.985), dh)
-      .mul(float(1).sub(smoothstep(R.mul(0.985), R.mul(1.075), dh)));
-    return mix(e.add(vec3(0.42, 0.68, 1.0).mul(ring).mul(0.45).mul(U.handActive)), debugColor, dbg);
+      .mul(float(1).sub(smoothstep(R.mul(0.985), R.mul(1.075), dh)))
+      .mul(float(1).sub(U.moldActive));
+
+    // 模具预览：把即将扣下去的那个形状的**轮廓**直接画在雪面上。
+    // 画的是 molds.js 给的那条有向距离，所以描的是形状本身的边
+    // （城墙的长方形、星形的五个角），不是一个笼统的圆。
+    // 整段包在 uniform 条件里 —— 用手的时候这些指令一条也不执行。
+    const preview = vec3(0).toVar();
+    If(U.moldActive.greaterThan(0.5), () => {
+      const sd = moldShape(moldLocal(positionWorld.xz)).y;
+      const fill = float(1).sub(smoothstep(-0.05, 0.0, sd));
+      const line = float(1).sub(smoothstep(0.0, 0.06, sd.abs()));
+      preview.assign(vec3(0.40, 0.72, 1.0).mul(fill.mul(0.085).add(line.mul(0.50))));
+    });
+
+    return mix(e.add(vec3(0.42, 0.68, 1.0).mul(ring).mul(0.45).mul(U.handActive)).add(preview),
+      debugColor, dbg);
   })();
 
   return mat;
@@ -971,6 +1072,7 @@ for (let k = LEVELS - 1; k >= 0; k--) _built.push(createLevel(k, _built[0] || nu
 export const levels = _built.slice().reverse();     // levels[0] 最细
 export const L0 = levels[0];
 export const computeDeform = L0.computeDeform;
+export const computeMold = L0.computeMold;
 
 // ---------------------------------------------------------------- 形变留存的两个 pass
 

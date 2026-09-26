@@ -12,7 +12,7 @@
  */
 
 import * as THREE from 'three/webgpu';
-import { U, params, HAND, SPRAY, SPRAY_BATCH, HALF } from './config.js';
+import { U, params, HAND, SPRAY, SPRAY_BATCH, HALF, CELL0 } from './config.js';
 import { computeDeform, computeMold } from './snowfield.js';
 import { computeSprayEmit } from './snowfall.js';
 import { terrainY } from './terrain.js';
@@ -216,24 +216,59 @@ export function createInteraction(renderer, camera, controls, dom) {
     U.moldAxis.value.set(ax * cs - az * sn, ax * sn + az * cs);
   }
 
+  // 正在「长」出来的模具。盖章不是一帧完成的：每个模具在 GROW_T 秒里
+  // 从底面升到全高，期间每帧重跑一遍 computeMold（它的合并是幂等的 max，
+  // 反复盖不会越盖越高）。拖着连放的时候会有好几个同时在长。
+  const GROW_T = 0.32;
+  const growing = [];
+
+  function stampMold(g, k) {
+    U.moldPos.value.set(g.x, g.baseY, g.z);
+    U.moldAxis.value.set(g.ax, g.az);
+    U.moldBase.value = g.baseY;
+    U.moldScale.value = g.s;
+    U.moldType.value = g.type;
+    U.moldBlur.value = g.blur;
+    U.moldReach.value = g.r + g.blur + g.s * 0.35;
+    U.moldGrow.value = k;
+    renderer.compute(computeMold);
+  }
+
+  function stepGrowing(dt) {
+    if (!growing.length) return;
+    let n = 0;
+    for (const g of growing) {
+      g.t = Math.min(1, g.t + dt / GROW_T);
+      // easeOutCubic：先快后慢，最后轻轻「落定」
+      const k = 1 - Math.pow(1 - g.t, 3);
+      stampMold(g, k);
+      if (g.t < 1) growing[n++] = g;
+    }
+    growing.length = n;
+    // 预览描边读的也是这几个 uniform，盖完章把它们交还给光标
+    U.moldGrow.value = 1;
+    U.moldScale.value = Math.max(0.05, params.moldSize);
+    U.moldType.value = params.mold;
+  }
+
   function placeMold() {
     const M = MOLDS[params.mold] || MOLDS[0];
     const s = Math.max(0.05, params.moldSize);
     // 底面比雪面低一点点，模具的脚是「陷进雪里」而不是「摆在雪上」的
     const base = surfaceAt(S.cur.x, S.cur.z) - s * 0.05;
 
-    U.moldPos.value.set(S.cur.x, base, S.cur.z);
-    U.moldBase.value = base;
-    U.moldScale.value = s;
-    U.moldType.value = params.mold;
-    renderer.compute(computeMold);
-
-    if (builds.length >= MAX_BUILDS) builds.shift();
-    builds.push({
+    const b = {
       x: S.cur.x, z: S.cur.z,
       ax: U.moldAxis.value.x, az: U.moldAxis.value.y,
       s, baseY: base, type: params.mold, r: M.foot * s + 0.05,
-    });
+    };
+
+    // 滤波半径：至少一格多一点（去锯齿），模具越高越宽（墙带一点收分）
+    growing.push({ ...b, t: 0, blur: CELL0 * 1.1 + M.top * s * 0.05 });
+
+    // CPU 镜像直接按最终形状记 —— 光标马上就能爬上去接着摞
+    if (builds.length >= MAX_BUILDS) builds.shift();
+    builds.push(b);
     rebound();
 
     S.lastPX = S.cur.x;
@@ -244,6 +279,8 @@ export function createInteraction(renderer, camera, controls, dom) {
   // ------------------------------------------------------------ 每帧
 
   function update(dt) {
+    stepGrowing(dt);
+
     // 平均雪面高度：跟 computeAccumulate 用同一条收敛规则
     const target = Math.max(params.depth, 1e-4);
     const gate = 1 - smoothstep01(target * 0.45, target, S.estY);
@@ -340,6 +377,7 @@ export function createInteraction(renderer, camera, controls, dom) {
   function setSurface(y) {
     S.estY = y;
     builds.length = 0;
+    growing.length = 0;
     rebound();
   }
 

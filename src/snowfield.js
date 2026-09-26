@@ -26,7 +26,7 @@
 
 import * as THREE from 'three/webgpu';
 import {
-  Fn, If, float, int, uint, vec2, vec3, vec4,
+  Fn, If, Loop, float, int, uint, vec2, vec3, vec4,
   instancedArray, instanceIndex, vertexIndex, uniform,
   positionLocal, positionWorld, cameraPosition,
   varying, smoothstep, mix, select, hash, mx_noise_float, mx_fractal_noise_float,
@@ -103,16 +103,6 @@ export const noised = (p) => {
 
 /** 1 = 完全在里面, 0 = 在半径外（feather 是过渡宽度） */
 const insideOf = (d, r, feather) => float(1).sub(smoothstep(float(r).sub(feather), float(r), d));
-
-/**
- * 多项式软最大值：两坨雪并起来的时候，接缝处长出一个半径约 k 的圆角。
- * 模具扣下去的雪和周围的雪就是靠它长在一起的 —— 硬 max 会留下一圈刀切的
- * 直角，一眼就看出是「贴上去的」，而不是「堆出来的」。
- */
-const smaxN = (a, b, k) => {
-  const e = float(k).sub(a.sub(b).abs()).max(0).div(k);
-  return a.max(b).add(e.mul(e).mul(k * 0.25));
-};
 
 /** 点到线段的距离（vec2） */
 const segDist = (p, a, b) => {
@@ -516,17 +506,28 @@ function createLevel(k, coarse) {
 
   // ---------------------------------------------------------------- 模具（也只有 L0）
   //
-  // 一次性的「盖章」：把 molds.js 里那个归一化的高度剖面按当前的落点 / 朝向 /
-  // 尺度摆好，和已有的雪做**软并集**。
+  // 「盖章」：把 molds.js 里那个归一化的高度剖面按当前的落点 / 朝向 /
+  // 尺度摆好，和已有的雪取并集。
   //
-  // 三件事让它看起来是「堆出来的」而不是「贴上去的」：
+  // 几件事让它看起来是「堆出来的」而不是「贴上去的」：
   //
-  //   1. 软并集。接缝处长出一个 5cm 的圆角，模具的脚自然埋进周围的雪里。
-  //      硬 max 会留一圈刀切的直角，一眼就穿帮。
-  //   2. 抖动 + 起伏。局部坐标先被噪声推开一点（轮廓不再是完美的圆），
+  //   1. 超采样滤波。剖面本身是阶跃的（塔墙从 0.3 直接跳到 2.16），
+  //      直接逐格点采样，轮廓就是一圈 5.8cm 的锯齿 —— 而且锯齿的**高度**
+  //      就是墙高，东西越高越难看。这里在每格周围 5x5 取样、按帐篷权重平均，
+  //      等于把剖面先做了一次低通：竖墙变成一两格宽的陡坡，锯齿消失。
+  //      滤波半径随模具高度加大（moldBlur），高墙顺便带一点向内收的「收分」，
+  //      正是沙模 / 雪模扣出来的真实样子，也更扛休止角。
+  //   2. 脚下的圆角（flare）。沿轮廓外侧长一圈凹圆角，只在周围确实有雪托着的
+  //      地方长 —— 摞在塔顶上时就只在平台上长，不会从半空垂下一圈裙边。
+  //   3. 抖动 + 起伏。局部坐标先被噪声推开一点（轮廓不再是完美的圆），
   //      高度再叠两层噪声（表面不再是数学曲面）。手拍出来的雪就是这样。
-  //   3. 压实度写满。于是它在着色上走「压实雪」那一档 —— 偏蓝、更致密、
+  //   4. 压实度写满。于是它在着色上走「压实雪」那一档 —— 偏蓝、更致密、
   //      不闪冰晶、没有风壳；同时休止角被抬高，塔才立得住（见 computeRelax）。
+  //
+  // 盖章不是一帧完成的：interaction.js 会在 ~0.3s 里把 moldGrow 从 0 推到 1，
+  // 每帧都跑一遍这个 pass，雪是「长」出来的而不是「啪」一下出现的。
+  // 所以这里的合并必须是**幂等**的纯 max —— 反复盖同一个章不能越盖越高。
+  // （以前的软并集每盖一次都会在接缝处再垫高一点，没法逐帧重复。）
   //
   // 高度是**绝对**的：moldBase 是模具 y=0 那一面的世界高度，减掉本格的地形
   // 才是雪深。这样斜坡上扣出来的塔是竖直的，不会跟着坡被剪切。
@@ -535,39 +536,68 @@ function createLevel(k, coarse) {
     computeMold = Fn(() => {
       const w = cw;
 
-      // 轮廓抖动：一格出头的量，刚好把「机器切出来的边」揉掉又不糊掉造型
-      const jx = noised(w.mul(14.0)).x.sub(0.5);
-      const jz = noised(w.mul(14.0).add(vec2(51.7, 19.3))).x.sub(0.5);
-      const sh = moldShape(moldLocal(w).add(vec2(jx, jz).mul(0.05)));
+      // 影响范围之外直接跳过：一次盖章只动模具底下那一小块
+      If(w.sub(U.moldPos.xz).length().lessThan(U.moldReach), () => {
+        // 轮廓抖动：一格出头的量，刚好把「机器切出来的边」揉掉又不糊掉造型
+        const jx = noised(w.mul(14.0)).x.sub(0.5);
+        const jz = noised(w.mul(14.0).add(vec2(51.7, 19.3))).x.sub(0.5);
+        const wj = w.add(vec2(jx, jz).mul(U.moldScale.mul(0.05)));
 
-      // 在轮廓里面 且 这一点确实有高度（雪屋的门廊之外、星形的凹角之外都不算）
-      const mask = float(1).sub(smoothstep(-0.02, 0.015, sh.y))
-        .mul(smoothstep(0.0, 0.025, sh.x))
-        .clamp(0, 1);
+        // ---- 5x5 帐篷滤波 ----
+        const hSum = float(0).toVar();   // 高度（归一化）
+        const mSum = float(0).toVar();   // 在轮廓里、且确实有高度
+        const step = U.moldBlur.mul(0.5);
+        Loop({ start: 0, end: 25, type: 'int' }, ({ i }) => {
+          const ix = i.mod(5).sub(2);
+          const iy = i.div(5).sub(2);
+          const wt = float(3).sub(ix.abs().toFloat()).mul(float(3).sub(iy.abs().toFloat()));
+          const s = moldShape(moldLocal(wj.add(vec2(ix.toFloat(), iy.toFloat()).mul(step))));
+          hSum.addAssign(s.x.mul(wt));
+          mSum.addAssign(select(s.y.lessThan(0.0).and(s.x.greaterThan(0.02)), float(1), float(0)).mul(wt));
+        });
+        const hN = hSum.div(81.0);
+        const cover = mSum.div(81.0);
 
-      const lumps = noised(w.mul(8.0)).x.sub(0.5).mul(0.055)
-        .add(noised(w.mul(29.0)).x.sub(0.5).mul(0.016));
+        // 中心那一点的有向距离，给脚下圆角用（归一化单位，>0 在外面）
+        const sd = moldShape(moldLocal(wj)).y;
 
-      const ty = terrainSample(w).x.toVar();
-      const h0 = height.element(instanceIndex);
-      const want = U.moldBase.add(sh.x.mul(U.moldScale)).add(lumps.mul(mask)).sub(ty).max(0);
+        const ty = terrainSample(w).x.toVar();
+        const h0 = height.element(instanceIndex);
+        const grow = U.moldGrow;
 
-      const nh = mix(h0, smaxN(h0, want, 0.05), mask).clamp(0, U.buildCeil);
-      height.element(instanceIndex).assign(nh);
-      surf.element(instanceIndex).assign(ty.add(nh));
+        const lumps = noised(w.mul(8.0)).x.sub(0.5).mul(0.055)
+          .add(noised(w.mul(29.0)).x.sub(0.5).mul(0.016));
+        const body = U.moldBase.add(hN.mul(U.moldScale).add(lumps.mul(cover)).mul(grow));
 
-      // 夯实：轮廓内部把压实度写满 1.0。它同时管着色（压实雪偏蓝、更致密、
-      // 不闪冰晶、没有风壳）和休止角（见 computeRelax 里那道 0.955 的门槛）。
-      // 「压得多实」由 U.packRepose 一个人调，这里必须是整 1.0 ——
-      // 写成 0.98 就踩在门槛边上，塌不塌全看噪声，非常难查。
-      const p0 = packed.element(instanceIndex);
-      packed.element(instanceIndex).assign(p0.max(mask).clamp(0, 1));
-      const cr0 = crust.element(instanceIndex);
-      crust.element(instanceIndex).assign(cr0.mul(float(1).sub(mask)).clamp(0, 1));
+        // 脚下的凹圆角：轮廓外 0.3 个模具半径内，从 0.14 个半径高平滑落到 0
+        const fq = float(1).sub(sd.div(0.30).clamp(0, 1));
+        const flareH = fq.mul(fq).mul(0.14).mul(U.moldScale).mul(grow);
+        // 只在周围本来就有雪托着的地方长（摞到塔顶上时不从半空挂下来）
+        const support = smoothstep(U.moldScale.mul(-0.12), float(0), ty.add(h0).sub(U.moldBase));
+        const flare = U.moldBase.add(flareH).sub(float(1).sub(support).mul(10.0));
 
-      // 记进「碰过」通道 —— 形变留存只存碰过的格子，走开再回来城堡还在
-      const tc0 = touchBuf.element(instanceIndex);
-      touchBuf.element(instanceIndex).assign(tc0.max(mask).clamp(0, 1));
+        const want = body.max(flare).sub(ty).max(0);
+        const nh = h0.max(want).clamp(0, U.buildCeil);
+        height.element(instanceIndex).assign(nh);
+        surf.element(instanceIndex).assign(ty.add(nh));
+
+        // 夯实：轮廓内部把压实度写满 1.0。它同时管着色（压实雪偏蓝、更致密、
+        // 不闪冰晶、没有风壳）和休止角（见 computeRelax 里那道 0.955 的门槛）。
+        // 「压得多实」由 U.packRepose 一个人调，这里必须是整 1.0 ——
+        // 写成 0.98 就踩在门槛边上，塌不塌全看噪声，非常难查。
+        // 滤波出来的边缘那一两格（cover 低）不夯实，让它像松雪一样软软地塌成坡脚。
+        const mask = smoothstep(0.30, 0.60, cover);
+        // 脚下圆角是手拍上去的，半实 —— 看得出压过，但会慢慢塌软
+        const touched = mask.max(select(flareH.greaterThan(0.002), support.mul(0.6), float(0)));
+        const p0 = packed.element(instanceIndex);
+        packed.element(instanceIndex).assign(p0.max(touched).clamp(0, 1));
+        const cr0 = crust.element(instanceIndex);
+        crust.element(instanceIndex).assign(cr0.mul(float(1).sub(touched)).clamp(0, 1));
+
+        // 记进「碰过」通道 —— 形变留存只存碰过的格子，走开再回来城堡还在
+        const tc0 = touchBuf.element(instanceIndex);
+        touchBuf.element(instanceIndex).assign(tc0.max(touched).clamp(0, 1));
+      });
     })().compute(CELLS);
   }
 

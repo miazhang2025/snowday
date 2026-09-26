@@ -30,6 +30,7 @@ import { createInteraction } from './interaction.js';
 import { initUI } from './ui.js';
 import { loadModel, unloadModel } from './models.js';
 import { t, applyStatic } from './i18n.js';
+import { initLanding } from './landing.js';
 
 // 载入画面在 init 之前就要有文字，所以这里先刷一次静态文案
 applyStatic();
@@ -100,6 +101,10 @@ function scatter(count, rMin, rMax, seed, sMin, sMax, opts = {}) {
 
 const CAM_HOME = new THREE.Vector3(9.4, 5.0, 11.6);
 const CAM_TARGET = new THREE.Vector3(0, 0.5, 0);
+// 落地页的机位：贴着雪面、平着看出去，像 OG 图那样有前景有远景。
+// 从高处俯看的话一地白，粉色的标题会被洗掉。
+const CAM_LAND = new THREE.Vector3(6.4, 1.7, 8.0);
+const CAM_LAND_TARGET = new THREE.Vector3(0, 1.0, 0);
 
 // ---------------------------------------------------------------- 启动
 
@@ -301,7 +306,53 @@ function fillSnow(depth) {
   interaction?.setSurface(depth);
 }
 
+// ---------------------------------------------------------------- 进场飞行
+//
+// 点了 ENTER 之后从落地页的低机位飞回玩雪的机位。在球坐标里插值而不是直线插：
+// 落地页的镜头一直在绕圈，到点的时候可能正在对面，直线飞会从目标点边上擦过去，
+// 画面一下子怼到脸上再翻过来。方位角走短的那一边。
+
+let fly = null;
+const _sph0 = new THREE.Spherical();
+const _sph1 = new THREE.Spherical();
+const _sph2 = new THREE.Spherical();
+const _off = new THREE.Vector3();
+
+function flyHome() {
+  _sph0.setFromVector3(_off.subVectors(camera.position, controls.target));
+  _sph1.setFromVector3(_off.subVectors(CAM_HOME, CAM_TARGET));
+  let dTheta = _sph1.theta - _sph0.theta;
+  dTheta = Math.atan2(Math.sin(dTheta), Math.cos(dTheta));
+  fly = {
+    t: 0, from: _sph0.clone(), dTheta, to: _sph1.clone(),
+    q: controls.target.clone(),
+  };
+}
+
+function stepFly(dt) {
+  if (!fly) return;
+  // 飞的途中用户自己抓住镜头了 —— 让给他
+  if (controls.__dragging) { fly = null; return; }
+  fly.t = Math.min(1, fly.t + dt / 2.2);
+  const k = fly.t < 0.5 ? 4 * fly.t ** 3 : 1 - (-2 * fly.t + 2) ** 3 / 2;
+  const s = _sph2.set(
+    fly.from.radius + (fly.to.radius - fly.from.radius) * k,
+    fly.from.phi + (fly.to.phi - fly.from.phi) * k,
+    fly.from.theta + fly.dTheta * k,
+  );
+  controls.target.lerpVectors(fly.q, CAM_TARGET, k);
+  camera.position.setFromSpherical(s).add(controls.target);
+  if (fly.t >= 1) fly = null;
+}
+
+/** 落地页期间镜头在自转，绕到山坡那一侧时别钻进地里 */
+function keepAboveGround() {
+  const floor = terrainY(camera.position.x, camera.position.z) + 0.9;
+  if (camera.position.y < floor) camera.position.y = floor;
+}
+
 function resetView() {
+  fly = null;
   camera.position.copy(CAM_HOME);
   controls.target.copy(CAM_TARGET);
   controls.update();
@@ -321,9 +372,8 @@ let shotFrames = 0;
 let shotDone = null;
 
 /**
- * 请求拍一张。真正的快门在主循环里按（见 animate），存完再回调 ——
- * 面板那边要等这一声才敢显示「已保存」。帧率低的时候这中间能差上好几秒，
- * 点完就报「已保存」是在撒谎。
+ * 请求拍一张。真正的快门在主循环里按（见 animate），拿到 PNG 之后回调 done(blob)，
+ * 由 photo.js 摆出预览页；失败时回调 done(null)。帧率低的时候这中间能差上好几秒。
  */
 function takeShot(done) {
   if (shotFrames > 0) return;        // 上一张还没落地，别叠
@@ -335,29 +385,8 @@ function saveFrame() {
   // toBlob 是在**调用的这一刻**对画面取样的，回调只是拿结果，
   // 所以必须紧跟在 postfx.render() 后面、同一个 rAF 里调。
   renderer.domElement.toBlob((blob) => {
-    if (!blob) {
-      console.warn('[snow] 截图失败：读不出画面');
-      shotDone?.(false);
-      shotDone = null;
-      return;
-    }
-    const d = new Date();
-    const p2 = (n) => String(n).padStart(2, '0');
-    const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}`
-      + `-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
-    // 锚点必须真的挂进文档里再点。游离节点上的 download 在 Chrome 上多数时候
-    // 能work，但 Safari / Firefox 会直接吞掉，排查起来毫无线索（什么都不发生）。
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `comrade-noise-${stamp}.png`;
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
-    console.info(`[snow] 已保存 ${a.download}（${(blob.size / 1e6).toFixed(2)}MB）`);
-    shotDone?.(true);
+    if (!blob) console.warn('[snow] 截图失败：读不出画面');
+    shotDone?.(blob || null);
     shotDone = null;
   }, 'image/png');
 }
@@ -370,6 +399,8 @@ function saveFrame() {
 const keys = new Set();
 addEventListener('keydown', (e) => {
   if (e.target !== document.body && e.target.tagName === 'INPUT') return;
+  // 落地页、拍照预览开着的时候不走动
+  if (document.body.matches('.landing, .viewing')) return;
   keys.add(e.code);
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
@@ -378,25 +409,35 @@ addEventListener('blur', () => keys.clear());
 const _mv = new THREE.Vector3();
 const _fw = new THREE.Vector3();
 const _rt = new THREE.Vector3();
+const _want = new THREE.Vector3();
+const walkVel = new THREE.Vector3();   // 当前速度（世界坐标，m/s），带惯性
 
 function walk(dt) {
   const f = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
   const r = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
   // 注意别用 Space —— 它已经绑给「开关降雪」了
   const u = (keys.has('KeyE') ? 1 : 0) - (keys.has('KeyQ') ? 1 : 0);
-  if (!f && !r && !u) return;
+  if (!f && !r && !u && walkVel.lengthSq() < 1e-6) { walkVel.set(0, 0, 0); return; }
 
   camera.getWorldDirection(_fw);
   _fw.y = 0;
   if (_fw.lengthSq() < 1e-8) _fw.set(0, 0, -1);
   _fw.normalize();
-  _rt.set(_fw.z, 0, -_fw.x);
+  // 右手边 = forward × up（three 是右手系，y 朝上）
+  _rt.set(-_fw.z, 0, _fw.x);
 
-  const speed = (keys.has('ShiftLeft') || keys.has('ShiftRight') ? 46 : 9) * dt;
-  _mv.set(0, 0, 0)
-    .addScaledVector(_fw, f * speed)
-    .addScaledVector(_rt, r * speed);
-  _mv.y = u * speed;
+  // 目标速度；斜着走不比直着走快
+  const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 46 : 9;
+  _want.set(0, 0, 0).addScaledVector(_fw, f).addScaledVector(_rt, r);
+  if (_want.lengthSq() > 1) _want.normalize();
+  _want.multiplyScalar(speed);
+  _want.y = u * speed;
+
+  // 指数逼近目标速度：起步 ~0.15s 到位，松手 ~0.25s 滑停。和帧率无关。
+  const k = 1 - Math.exp(-dt * (f || r || u ? 14 : 9));
+  walkVel.lerp(_want, k);
+
+  _mv.copy(walkVel).multiplyScalar(dt);
 
   camera.position.add(_mv);
   controls.target.add(_mv);
@@ -425,7 +466,9 @@ function animate() {
 
   // --- 相机 ---
   walk(dt);
+  stepFly(dt);
   controls.update();
+  if (document.body.classList.contains('landing')) keepAboveGround();
 
   // --- clipmap 跟随观察点 ---
   // 用 controls.target 而不是相机位置：玩家真正在看的是那儿，
@@ -515,6 +558,10 @@ function fail(msg) {
 }
 
 init().then(() => {
+  camera.position.copy(CAM_LAND);
+  controls.target.copy(CAM_LAND_TARGET);
+  controls.update();
+  initLanding(controls, { onEnter: flyHome });
   requestAnimationFrame(() => {
     setTimeout(() => document.getElementById('boot').classList.add('done'), 260);
   });

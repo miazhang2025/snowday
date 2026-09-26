@@ -13,8 +13,8 @@ const STORE_KEY = 'snow.lang';
 const DICT = {
   en: {
     'doc.title': 'Snow Day · Build a Snowman — WebGPU',
-    'brand.name': 'Comrade Noise',
-    'brand.sub': 'Play in the snow · WebGPU',
+    'brand.name': 'Snow Day',
+    'brand.sub': 'Realtime Snow · WebGPU',
     'brand.blurb': 'Push the snow around, press a snowman out of a mold, build a castle. '
       + 'Every flake, footprint and shadow is simulated live on your GPU.',
 
@@ -28,25 +28,45 @@ const DICT = {
     'panel.title': 'Control',
     'panel.hide': 'Collapse (H)',
     'panel.show': 'Open controls',
+    'panel.toggle': 'Show / hide controls (H)',
     'panel.lang': 'Switch to Chinese',
     'panel.langLabel': '中文',
     'hint.toggle': 'Show / hide controls',
     'hint.show': 'Controls',
     'hint.hide': 'Hide',
-    'hint.photo': 'Save a PNG of the view (P)',
+    'hint.photo': 'Take a photo (P)',
     'b.photo': '◉ Photo',
     'b.photoSaved': '✓ Saved',
 
-    'hint.html':
-      '<em>Drag left</em> push snow &nbsp;·&nbsp; <em>Click</em> handprint &nbsp;·&nbsp; '
-      + '<em>Right-drag</em> orbit &nbsp;·&nbsp; <em>Middle</em> pan &nbsp;·&nbsp; <em>Wheel</em> zoom<br/>'
-      + '<em>Mold</em> click to press a shape, drag to lay a row, place on top to stack<br/>'
-      + '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk &nbsp; <kbd>Q</kbd><kbd>E</kbd> down / up '
-      + '&nbsp; <kbd>shift</kbd> sprint<br/>'
-      + '<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> push / smooth / pile &nbsp; <kbd>4</kbd> mold '
-      + '&nbsp; <kbd>M</kbd> next mold &nbsp; <kbd>,</kbd><kbd>.</kbd> turn &nbsp; <kbd>[</kbd><kbd>]</kbd> size<br/>'
-      + '<kbd>C</kbd> clear &nbsp; <kbd>F</kbd> fill &nbsp; <kbd>space</kbd> snowfall '
-      + '&nbsp; <kbd>P</kbd> photo &nbsp; <kbd>H</kbd> panel',
+    'land.enter': 'Enter (↵)',
+    'land.foot': 'A quiet place to play in the snow · live on WebGPU',
+
+    'shot.title': 'Snapshot',
+    'shot.save': 'Save PNG',
+    'shot.share': 'Share',
+    'shot.again': 'Keep playing',
+    'shot.close': 'Close (Esc)',
+
+    'hint.html': ''
+      + '<div class="hk"><span><em>Drag</em></span><b>push snow</b></div>'
+      + '<div class="hk"><span><em>Click</em></span><b>handprint</b></div>'
+      + '<div class="hk"><span><em>Right-drag</em></span><b>orbit</b></div>'
+      + '<div class="hk"><span><em>Middle</em></span><b>pan</b></div>'
+      + '<div class="hk"><span><em>Wheel</em></span><b>zoom</b></div>'
+      + '<div class="hk"><span><em>Mold</em></span><b>click to press · drag for a row · stack on top</b></div>'
+      + '<div class="hk"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><b>walk</b></div>'
+      + '<div class="hk"><span><kbd>Q</kbd><kbd>E</kbd></span><b>down / up</b></div>'
+      + '<div class="hk"><span><kbd>shift</kbd></span><b>sprint</b></div>'
+      + '<div class="hk"><span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd></span><b>push / smooth / pile</b></div>'
+      + '<div class="hk"><span><kbd>4</kbd></span><b>mold</b></div>'
+      + '<div class="hk"><span><kbd>M</kbd></span><b>next mold</b></div>'
+      + '<div class="hk"><span><kbd>,</kbd><kbd>.</kbd></span><b>turn mold</b></div>'
+      + '<div class="hk"><span><kbd>[</kbd><kbd>]</kbd></span><b>size</b></div>'
+      + '<div class="hk"><span><kbd>C</kbd></span><b>clear</b></div>'
+      + '<div class="hk"><span><kbd>F</kbd></span><b>fill</b></div>'
+      + '<div class="hk"><span><kbd>space</kbd></span><b>snowfall on / off</b></div>'
+      + '<div class="hk"><span><kbd>P</kbd></span><b>photo</b></div>'
+      + '<div class="hk"><span><kbd>H</kbd></span><b>control panel</b></div>',
 
     'g.gesture': 'Gesture',
     'g.snowfall': 'Snowfall',
@@ -123,8 +143,8 @@ const DICT = {
 
   zh: {
     'doc.title': '下雪天 · 堆个雪人 —— WebGPU',
-    'brand.name': 'Comrade Noise',   // 品牌名，中英一致
-    'brand.sub': '来玩雪 · WebGPU',
+    'brand.name': 'Snow Day',   // 品牌名，中英一致
+    'brand.sub': '实时降雪 · WebGPU',
     'brand.blurb': '推推雪，用模具扣个雪人，再搭座城堡。'
       + '每一片雪、每一道脚印、每一块阴影，都是显卡当场算出来的。',
 
@@ -138,25 +158,45 @@ const DICT = {
     'panel.title': '控制面板',
     'panel.hide': '收起 (H)',
     'panel.show': '展开控制面板',
+    'panel.toggle': '展开 / 收起控制面板（H）',
     'panel.lang': '切换到英文',
     'panel.langLabel': 'EN',
     'hint.toggle': '展开 / 收起操作说明',
     'hint.show': '操作说明',
     'hint.hide': '收起',
-    'hint.photo': '把当前画面存成 PNG（P）',
+    'hint.photo': '拍照（P）',
     'b.photo': '◉ 拍照',
     'b.photoSaved': '✓ 已保存',
 
-    'hint.html':
-      '<em>左键拖动</em> 推雪 &nbsp;·&nbsp; <em>轻点</em> 手印 &nbsp;·&nbsp; <em>右键拖动</em> 转视角 '
-      + '&nbsp;·&nbsp; <em>中键</em> 平移 &nbsp;·&nbsp; <em>滚轮</em> 缩放<br/>'
-      + '<em>模具</em> 点一下扣一坨雪，按住拖着走连成一排，扣在已有的东西上就是往上摞<br/>'
-      + '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 走动 &nbsp; <kbd>Q</kbd><kbd>E</kbd> 升 / 降 '
-      + '&nbsp; <kbd>shift</kbd> 加速<br/>'
-      + '<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 推雪 / 抚平 / 堆雪 &nbsp; <kbd>4</kbd> 模具 '
-      + '&nbsp; <kbd>M</kbd> 换模具 &nbsp; <kbd>,</kbd><kbd>.</kbd> 转向 &nbsp; <kbd>[</kbd><kbd>]</kbd> 大小<br/>'
-      + '<kbd>C</kbd> 清空 &nbsp; <kbd>F</kbd> 铺满 &nbsp; <kbd>space</kbd> 降雪 '
-      + '&nbsp; <kbd>P</kbd> 拍照 &nbsp; <kbd>H</kbd> 面板',
+    'land.enter': '进入（回车）',
+    'land.foot': '一个安静玩雪的地方 · WebGPU 实时渲染',
+
+    'shot.title': '拍下的这一张',
+    'shot.save': '保存 PNG',
+    'shot.share': '分享',
+    'shot.again': '继续玩',
+    'shot.close': '关闭（Esc）',
+
+    'hint.html': ''
+      + '<div class="hk"><span><em>左键拖动</em></span><b>推雪</b></div>'
+      + '<div class="hk"><span><em>轻点</em></span><b>手印</b></div>'
+      + '<div class="hk"><span><em>右键拖动</em></span><b>转视角</b></div>'
+      + '<div class="hk"><span><em>中键</em></span><b>平移</b></div>'
+      + '<div class="hk"><span><em>滚轮</em></span><b>缩放</b></div>'
+      + '<div class="hk"><span><em>模具</em></span><b>点一下扣一坨 · 拖着连成一排 · 扣在上面往上摞</b></div>'
+      + '<div class="hk"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><b>走动</b></div>'
+      + '<div class="hk"><span><kbd>Q</kbd><kbd>E</kbd></span><b>降 / 升</b></div>'
+      + '<div class="hk"><span><kbd>shift</kbd></span><b>加速</b></div>'
+      + '<div class="hk"><span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd></span><b>推雪 / 抚平 / 堆雪</b></div>'
+      + '<div class="hk"><span><kbd>4</kbd></span><b>模具</b></div>'
+      + '<div class="hk"><span><kbd>M</kbd></span><b>换模具</b></div>'
+      + '<div class="hk"><span><kbd>,</kbd><kbd>.</kbd></span><b>模具转向</b></div>'
+      + '<div class="hk"><span><kbd>[</kbd><kbd>]</kbd></span><b>大小</b></div>'
+      + '<div class="hk"><span><kbd>C</kbd></span><b>清空</b></div>'
+      + '<div class="hk"><span><kbd>F</kbd></span><b>铺满</b></div>'
+      + '<div class="hk"><span><kbd>space</kbd></span><b>开关降雪</b></div>'
+      + '<div class="hk"><span><kbd>P</kbd></span><b>拍照</b></div>'
+      + '<div class="hk"><span><kbd>H</kbd></span><b>控制面板</b></div>',
 
     'g.gesture': '手势',
     'g.snowfall': '降雪',

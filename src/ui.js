@@ -10,6 +10,7 @@
 import { params, defaults, refresh, HAND, DAY_START, DAY_END } from './config.js';
 import { MOLDS } from './molds.js';
 import { t, getLang, otherLang, setLang, onLangChange, applyStatic } from './i18n.js';
+import { openPhoto, closePhoto } from './photo.js';
 
 const $ = (s) => document.querySelector(s);
 
@@ -339,65 +340,58 @@ export function initUI(actions) {
     staticBtns.forEach(paintBtn);
     paintFallBtn();
     langBtn.textContent = t('panel.langLabel');
-    paintHint();
     actions.onLang?.(getLang());
   }
   onLangChange(applyLang);
 
-  // ---------------------------------------------------------- 左下说明的折叠
+  // ---------------------------------------------------------- 右上三个图标
+  //
+  //   #  操作说明     相机  拍照 → 预览     *  控制面板
+  //
+  // 同一时间只开一样。开了哪个，另外两个图标就收起来，剩下那个就是它的关闭键。
+  // 状态写在 body[data-open] 上，CSS 靠它藏图标；panel / help 自己挂 .hidden。
 
-  const hintWrap = $('#hintwrap');
-  const hintBtn = $('#hinttoggle');
-  const HINT_KEY = 'snow.hint';
-  let hintOpen = true;
-  try { hintOpen = localStorage.getItem(HINT_KEY) !== '0'; } catch { /* 隐私模式 */ }
+  const help = $('#help');
+  let opened = null;
 
-  const shotBtn = $('#shotbtn');
-  let shotTimer = 0;
-
-  function paintShot(saved) {
-    shotBtn.textContent = t(saved ? 'b.photoSaved' : 'b.photo');
-    shotBtn.classList.toggle('on', !!saved);
+  function setOpen(name) {
+    if (opened === 'photo' && name !== 'photo') closePhoto();
+    opened = name;
+    panel.classList.toggle('hidden', name !== 'panel');
+    help.classList.toggle('hidden', name !== 'help');
+    if (name) document.body.dataset.open = name;
+    else delete document.body.dataset.open;
   }
+  const toggle = (name) => setOpen(opened === name ? null : name);
 
-  /** 拍一张。快门要等几帧（让光标环的残影散掉），所以「已保存」由 main.js
-      在文件真的落地之后回调过来 —— 点完就报成功是在撒谎，帧率低时差好几秒。 */
+  /** 拍一张。快门要等几帧（让光标环的残影散掉），拿到画面之后
+      main.js 回调过来，交给 photo.js 摆出预览页 —— 存不存由人在那里决定。
+      按下快门的那一刻就算「开着相机」：面板、说明先收掉。 */
+  let shooting = false;
   function doShot() {
-    actions.onShot?.((ok) => {
-      if (!ok) return;
-      paintShot(true);
-      clearTimeout(shotTimer);
-      shotTimer = setTimeout(() => paintShot(false), 1500);
+    if (shooting) return;
+    shooting = true;
+    setOpen('photo');
+    actions.onShot?.((blob) => {
+      shooting = false;
+      if (!blob) { setOpen(null); return; }
+      openPhoto(blob, { onClose: () => { if (opened === 'photo') setOpen(null); } });
     });
   }
-  shotBtn.onclick = doShot;
 
-  function paintHint() {
-    hintWrap.classList.toggle('collapsed', !hintOpen);
-    hintBtn.textContent = hintOpen ? t('hint.hide') : t('hint.show');
-    paintShot(false);
-  }
-  hintBtn.onclick = () => {
-    hintOpen = !hintOpen;
-    try { localStorage.setItem(HINT_KEY, hintOpen ? '1' : '0'); } catch { /* 忽略 */ }
-    paintHint();
+  $('#helpbtn').onclick = () => toggle('help');
+  $('#panelbtn').onclick = () => toggle('panel');
+  $('#shotbtn').onclick = () => {
+    if (opened === 'photo') { if (!shooting) setOpen(null); }
+    else doShot();
   };
-
-  // ---------------------------------------------------------- 显隐
-
-  const showBtn = $('#showui');
-  const togglePanel = (v) => {
-    panel.classList.toggle('hidden', !v);
-    showBtn.classList.toggle('show', !v);
-    document.body.classList.toggle('panel-hidden', !v);
-  };
-  $('#hideui').onclick = () => togglePanel(false);
-  showBtn.onclick = () => togglePanel(true);
 
   // ---------------------------------------------------------- 快捷键
 
   window.addEventListener('keydown', (e) => {
     if (e.target instanceof HTMLInputElement) return;
+    // 落地页还没进去、或者正在看照片：这些键都不归面板管
+    if (document.body.matches('.landing, .viewing')) return;
     const k = e.key.toLowerCase();
     const molding = params.mode === HAND.MOLD;
     if (k === '1') setMode(HAND.PUSH);
@@ -411,7 +405,7 @@ export function initUI(actions) {
     else if (k === 'f') actions.onFill(params.depth);
     else if (k === 'r') actions.onResetView();
     else if (k === 'p') doShot();
-    else if (k === 'h') togglePanel(panel.classList.contains('hidden'));
+    else if (k === 'h') toggle('panel');
     // 拿着模具的时候 [ ] 调的是模具大小 —— 手不在场上，调手掌没有意义
     else if (k === '[' && molding) { params.moldSize = Math.max(0.18, params.moldSize - 0.08); syncAll(); commit(); }
     else if (k === ']' && molding) { params.moldSize = Math.min(1.8, params.moldSize + 0.08); syncAll(); commit(); }
@@ -426,6 +420,7 @@ export function initUI(actions) {
   });
 
   applyStatic();
+  setOpen('panel');
   setMode(params.mode);
   setQuality(params.quality);
   syncAll();

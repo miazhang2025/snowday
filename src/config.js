@@ -171,6 +171,9 @@ export const U = {
   moldScale:     uniform(0.55),                     // 归一化单位 -> 米
   moldType:      uniform(0),
   moldActive:    uniform(0),                        // 是否画预览轮廓
+  moldGrow:      uniform(1),                        // 盖章动画进度 0..1（已缓动）
+  moldBlur:      uniform(0.06),                     // 盖章时的滤波半径（米）
+  moldReach:     uniform(1),                        // 盖章影响半径（米），之外的格子直接跳过
   // 压实的雪能挺住多陡的坡。松雪的休止角只有三十几度，塔一堆好就塌了；
   // 手压过的雪能立成墙，这是模具扣出来的东西能站住的**唯一**原因，所以直接乘在休止角上。
   packRepose:    uniform(16),

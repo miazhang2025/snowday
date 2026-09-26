@@ -299,7 +299,9 @@ export function createInteraction(renderer, scene, camera, controls, dom) {
       S.inField = Math.abs(hit.x - center.x) < lim && Math.abs(hit.z - center.y) < lim;
       hit.x = THREE.MathUtils.clamp(hit.x, center.x - lim, center.x + lim);
       hit.z = THREE.MathUtils.clamp(hit.z, center.y - lim, center.y + lim);
-      hit.y = surfaceAt(hit.x, hit.z);
+      // 拿着模具：落点取这一列的顶面（这样才摞得上去）。
+      // 用手：打中雕塑侧面就是侧面上那一点 —— 手是一个球，要贴着它真正碰到的地方。
+      hit.y = sculptHit && params.mode !== HAND.MOLD ? sculptHit.point.y : surfaceAt(hit.x, hit.z);
       // 轻微跟随延迟，手看起来有一点重量
       S.cur.lerp(hit, S.down ? 0.75 : 0.45);
     } else {
@@ -361,22 +363,28 @@ export function createInteraction(renderer, scene, camera, controls, dom) {
       }
     }
 
-    // ---- 手在雪雕上 ----
-    // 射线先打到雪雕就改雪雕的距离场（抚平 / 推 / 堆），不碰高度场。
-    // 光标也换成一个贴在雕塑表面上的笔刷球。
-    const onSculpt = live ? sculptHit : null;
-    if (onSculpt) {
-      const R = U.handRadius.value * 0.5;
-      U.handActive.value = 0;
-      sculpts.setBrush(true, onSculpt.point, R);
-      if (S.engaged) {
-        const m = params.mode === HAND.PUSH ? 'push' : params.mode === HAND.PILE ? 'pile' : 'smooth';
-        sculpts.brush(onSculpt.sc, onSculpt.point, R, m, dt);
-      }
+    // ---- 手：一个球 ----
+    // 地面和雪雕用的是**同一只手**：同一个位置（平滑过的 3D 光标）、同一个半径
+    // （面板上的「手掌大小」）、同一条衰减曲线。每帧球碰到哪就改哪 ——
+    // 在雕塑脚下推，地面和雕塑一起被推开。
+    // 以前是二选一：射线打中雕塑就只改雕塑（而且半径减半），没打中就只改地面，
+    // 手一放到雕塑脚下射线就在两者之间来回跳，一帧推地一帧推雕塑，光标也跟着跳。
+    const R = U.handRadius.value;
+    const P = S.cur;
+    const nearGround = P.y - groundAt(P.x, P.z) < R * 0.6;
+    const hitSculpts = live ? sculpts.touching(P, R) : [];
+
+    U.handActive.value = live && nearGround ? 1 : 0;
+    sculpts.setBrush(hitSculpts.length > 0, P, R);
+    if (S.engaged && hitSculpts.length) {
+      const m = params.mode === HAND.PUSH ? 'push' : params.mode === HAND.PILE ? 'pile' : 'smooth';
+      for (const sc of hitSculpts) sculpts.brush(sc, P, R, m, dt);
+    }
+    if (!nearGround) {
+      // 手在雕塑半腰 / 顶上：地面够不着
       S.stamp = false;
       return;
     }
-    sculpts.setBrush(false);
 
     if (S.engaged && S.inField) {
       U.handMode.value = params.mode;

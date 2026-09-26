@@ -360,8 +360,9 @@ function resetView() {
 
 // ---------------------------------------------------------------- 拍照
 //
-// 存的是 canvas 本身，所以面板、说明、品牌字这些 DOM 一个都不会进画面 ——
-// 按下就是一张干净的风景照。
+// 存的是 canvas 本身，所以面板、说明这些 DOM 一个都不会进画面 ——
+// 按下就是一张干净的风景照。品牌落款（左下角的 SNOW DAY、左上角的一行字和网址）
+// 是存盘前另外画上去的，见 composeShot。
 //
 // 但光标环和模具预览是画在雪面着色里的，DOM 那一刀切不掉，得先把它们灭了。
 // 麻烦在 TRAA：它是攒历史帧的，当帧灭掉之后画面里还留着九成的残影，
@@ -381,10 +382,73 @@ function takeShot(done) {
   shotDone = done || null;
 }
 
+// ---- 照片上的落款 ----
+// 版式照搬页面上的 HUD：左上角一行 REALTIME SNOW · WEBGPU（DM Mono、大写、宽字距、
+// 淡紫投影），下面一行网址；左下角是标题图。尺寸按照片的短边等比缩放 ——
+// 照片是按设备像素存的，高分屏上的截图比页面大一两倍，落款要跟着一起大。
+const SHOT_TAG = 'REALTIME SNOW · WEBGPU';
+const SHOT_URL = 'snowday.crechetank.com';
+const shotTitle = new Image();
+shotTitle.src = 'assets/title.png';          // index.html 里已经 preload 过
+document.fonts?.load("500 20px 'DM Mono'").catch(() => {});
+
+function composeShot(src) {
+  const W = src.width, H = src.height;
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const g = c.getContext('2d');
+  g.drawImage(src, 0, 0);
+
+  const u = Math.min(W, H) / 900;             // 短边 900px 时 = 1
+  const shadow = () => {
+    g.shadowColor = 'rgba(70,58,100,.30)';
+    g.shadowBlur = 8 * u;
+    g.shadowOffsetY = 1 * u;
+  };
+
+  // 左上：两行字
+  g.save();
+  shadow();
+  g.fillStyle = '#fff';
+  g.textBaseline = 'top';
+  const x0 = Math.round(W * 0.045), y0 = Math.round(Math.min(W, H) * 0.05);
+  let fs = 15 * u;
+  g.font = `500 ${fs}px 'DM Mono', ui-monospace, monospace`;
+  if ('letterSpacing' in g) g.letterSpacing = `${(fs * 0.2).toFixed(1)}px`;
+  g.fillText(SHOT_TAG, x0, y0);
+  fs = 13 * u;
+  g.font = `400 ${fs}px 'DM Mono', ui-monospace, monospace`;
+  if ('letterSpacing' in g) g.letterSpacing = `${(fs * 0.17).toFixed(1)}px`;
+  g.globalAlpha = 0.9;
+  g.fillText(SHOT_URL.toUpperCase(), x0, y0 + 15 * u * 1.9);
+  g.restore();
+
+  // 左下：标题图
+  if (shotTitle.complete && shotTitle.naturalWidth) {
+    g.save();
+    g.shadowColor = 'rgba(90,70,120,.25)';
+    g.shadowBlur = 14 * u;
+    g.shadowOffsetY = 2 * u;
+    const tw = Math.min(W * 0.26, 340 * u);
+    const th = tw * shotTitle.naturalHeight / shotTitle.naturalWidth;
+    g.drawImage(shotTitle, Math.round(W * 0.035), Math.round(H - th - Math.min(W, H) * 0.045), tw, th);
+    g.restore();
+  }
+  return c;
+}
+
 function saveFrame() {
-  // toBlob 是在**调用的这一刻**对画面取样的，回调只是拿结果，
+  // 画面必须在**这一刻**取样（drawImage / toBlob 都是调用时取样的），
   // 所以必须紧跟在 postfx.render() 后面、同一个 rAF 里调。
-  renderer.domElement.toBlob((blob) => {
+  // 合成到一张 2D 画布上再存：WebGPU 的画面在这一帧交出去之后就读不到了。
+  let out = renderer.domElement;
+  try {
+    out = composeShot(renderer.domElement);
+  } catch (e) {
+    console.warn('[snow] 落款没画上，存原图：', e.message || e);
+  }
+  out.toBlob((blob) => {
     if (!blob) console.warn('[snow] 截图失败：读不出画面');
     shotDone?.(blob || null);
     shotDone = null;

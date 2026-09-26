@@ -147,17 +147,20 @@ function meshRange(g, ci0, ci1, cj0, cj1, ck0, ck1) {
   };
   const gc = [0, 0, 0];
 
+  // 8 个角相对体素原点的下标偏移
+  const off = CORNER.map((C) => C[0] + C[1] * sy + C[2] * sz);
+
   for (let k = vk0; k < ck1; k++) {
     for (let j = vj0; j < cj1; j++) {
       for (let i = vi0; i < ci1; i++) {
         const o = i + j * sy + k * sz;
-        let mask = 0;
-        for (let c = 0; c < 8; c++) {
-          const C = CORNER[c];
-          v[c] = F[o + C[0] + C[1] * sy + C[2] * sz];
-          if (v[c] < 0) mask |= 1 << c;
-        }
-        if (mask === 0 || mask === 255) continue;
+        // 绝大多数体素离表面很远，8 个角同号。一发现异号就停 —— 通常读两三个角就判完了，
+        // 比老老实实读满 8 个再看掩码快好几倍（整块重抽的耗时几乎全在这儿）。
+        const in0 = F[o] < 0;
+        let mixed = false;
+        for (let c = 1; c < 8; c++) if ((F[o + off[c]] < 0) !== in0) { mixed = true; break; }
+        if (!mixed) continue;
+        for (let c = 0; c < 8; c++) v[c] = F[o + off[c]];
 
         let ax = 0, ay = 0, az = 0, n = 0;
         for (const [a, b] of EDGES) {
@@ -508,8 +511,16 @@ export function createSculptures(scene, groundAt) {
 
   const markAll = (sc) => markDirty(sc, 0, sc.nx - 1, 0, sc.ny - 1, 0, sc.nz - 1);
 
-  function flush(sc) {
+  /**
+   * 重抽标脏的块。budget（毫秒）用完就停，剩下的留到下一帧 ——
+   * 手掌默认 50cm，一下能碰到半座塔，整块重抽要十几毫秒；分摊开来，
+   * 推得猛的时候网格晚一两帧跟上，帧率不会被一次大重抽拖垮。
+   */
+  function flush(sc, budget = Infinity) {
+    const t0 = performance.now();
     for (const key of sc.dirty) {
+      if (performance.now() - t0 > budget) break;
+      sc.dirty.delete(key);
       const ci = key % 1024, cj = Math.floor(key / 1024) % 1024, ck = Math.floor(key / 1048576);
       const geo = meshRange(sc, ci * CH, (ci + 1) * CH, cj * CH, (cj + 1) * CH, ck * CH, (ck + 1) * CH);
       let mesh = sc.chunks.get(key);
@@ -529,7 +540,6 @@ export function createSculptures(scene, groundAt) {
         sc.chunks.set(key, mesh);
       }
     }
-    sc.dirty.clear();
     // 新建的块在下一次渲染之前 matrixWorld 还是单位阵 —— 这一帧里的射线会打空，
     // 光标就被拽到远处的地面上去了（拖着连放时还会误放一个）。立刻刷新。
     sc.group.updateMatrixWorld(true);
@@ -704,7 +714,6 @@ export function createSculptures(scene, groundAt) {
   }
 
   // ---- 手 ----
-  const RATE = 0.45;       // 推 / 堆：笔刷中心每秒挪动表面多少米
 
   /**
    * 手在雪雕上：直接改距离场。
@@ -712,6 +721,10 @@ export function createSculptures(scene, groundAt) {
    *   PILE   往外鼓（场值变小）
    *   SMOOTH 向 6 邻域的平均拉 —— 对距离场这就是拉普拉斯平滑：
    *          平面上不动，凸棱被磨圆，凹角被填上
+   *
+   * 大小、衰减、力度都和地面上那只手（snowfield.js 的 computeDeform）对齐：
+   *   衰减   1 - smoothstep(内圈, R, d)，推 / 抚平的内圈是 0.22R，堆是 0.05R —— 和地面同一条曲线
+   *   力度   跟着面板上的「按压力度」走（U.handPress），推 / 堆每秒挪动表面约 6×handPress 米
    */
   function brush(sc, p, R, mode, dt) {
     if (sc.grow < 1) return;
@@ -742,6 +755,8 @@ export function createSculptures(scene, groundAt) {
     const SW = G.i1 - G.i0 + 3, SH = G.j1 - G.j0 + 3;
     const S = (i, j, k) => snap[(i - G.i0 + 1) + SW * ((j - G.j0 + 1) + SH * (k - G.k0 + 1))];
     const kS = Math.min(1, dt * 14);
+    const rate = U.handPress.value * 6.0;
+    const r0 = (mode === 'pile' ? 0.05 : 0.22) * R;
 
     for (let k = G.k0; k <= G.k1; k++) {
       const dz = sc.z0 + k * h - lz;
@@ -749,12 +764,13 @@ export function createSculptures(scene, groundAt) {
         const dy = sc.y0 + j * h - ly;
         for (let i = G.i0; i <= G.i1; i++) {
           const dx = sc.x0 + i * h - lx;
-          const q = (dx * dx + dy * dy + dz * dz) / (R * R);
-          if (q >= 1) continue;
-          const w = (1 - q) * (1 - q);
+          const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          if (d >= R) continue;
+          const tt = Math.max(0, (d - r0) / (R - r0));
+          const w = 1 - tt * tt * (3 - 2 * tt);       // 1 - smoothstep(r0, R, d)
           const o = i + j * nx + k * sz;
-          if (mode === 'push') F[o] += RATE * dt * w;
-          else if (mode === 'pile') F[o] -= RATE * dt * w;
+          if (mode === 'push') F[o] += rate * dt * w;
+          else if (mode === 'pile') F[o] -= rate * dt * w;
           else {
             const avg = (S(i - 1, j, k) + S(i + 1, j, k) + S(i, j - 1, k)
               + S(i, j + 1, k) + S(i, j, k - 1) + S(i, j, k + 1)) / 6;
@@ -765,7 +781,7 @@ export function createSculptures(scene, groundAt) {
     }
     computeTops(sc, G.i0, G.i1, G.k0, G.k1);
     markDirty(sc, G.i0, G.i1, G.j0, G.j1, G.k0, G.k1);
-    // 网格不在这里重抽：update 里隔帧抽一次（30Hz 看不出来，省一半）
+    // 网格不在这里重抽：update 里按每帧的时间预算抽
   }
 
   // ---- 查询 ----
@@ -791,6 +807,22 @@ export function createSculptures(scene, groundAt) {
   }
 
   const builtAt = (x, z) => builtInfo(x, z).y;
+
+  /** 以 p 为球心、半径 R 的手碰得到哪几座（球和体素格的包围盒相交） */
+  function touching(p, R) {
+    const out = [];
+    for (const sc of list) {
+      if (sc.grow < 1) continue;
+      const ddx = p.x - sc.cxW, ddz = p.z - sc.czW;
+      if (Math.hypot(ddx, ddz) > sc.r + R) continue;
+      const lx = toLocalX(sc, p.x, p.z), lz = toLocalZ(sc, p.x, p.z), ly = p.y - sc.baseY;
+      const cx = Math.max(sc.x0, Math.min(sc.x0 + (sc.nx - 1) * sc.h, lx));
+      const cy = Math.max(sc.y0, Math.min(sc.y0 + (sc.ny - 1) * sc.h, ly));
+      const cz = Math.max(sc.z0, Math.min(sc.z0 + (sc.nz - 1) * sc.h, lz));
+      if (Math.hypot(lx - cx, ly - cy, lz - cz) < R) out.push(sc);
+    }
+    return out;
+  }
 
   /**
    * 新模具挨着哪一座、能不能合并进去。
@@ -844,10 +876,10 @@ export function createSculptures(scene, groundAt) {
     return { point: hits[0].point, distance: hits[0].distance, sc: hits[0].object.userData.sc };
   }
 
-  let frame = 0;
+  const FLUSH_BUDGET = 5;    // 每帧最多花这么多毫秒重抽网格（所有雪雕合计）
 
   function update(dt) {
-    frame++;
+    let left = FLUSH_BUDGET;
     for (const sc of list) {
       if (sc.grow < 1) {
         sc.grow = Math.min(1, sc.grow + dt / GROW_T);
@@ -858,7 +890,11 @@ export function createSculptures(scene, groundAt) {
         sc.group.updateMatrixWorld(true);
       }
       if (sc.anims.length) sc.anims = sc.anims.filter((a) => !stepAnim(sc, a, dt));
-      if (sc.dirty.size && (sc.anims.length || (frame & 1) === 0)) flush(sc);
+      if (sc.dirty.size && left > 0) {
+        const t = performance.now();
+        flush(sc, left);
+        left -= performance.now() - t;
+      }
     }
   }
 
@@ -898,7 +934,7 @@ export function createSculptures(scene, groundAt) {
   }
 
   return {
-    place, brush, raycast, builtAt, builtInfo, update,
+    place, brush, raycast, builtAt, builtInfo, touching, update,
     setGhost, setBrush, clear, prune, list, brushBall,
   };
 }

@@ -227,13 +227,11 @@
   .toolbtn{
     width:38px;height:38px;padding:0;margin-left:14px;display:grid;place-items:center;
     background:none;border:0;border-radius:0;text-shadow:none;overflow:hidden;
-    transition:width .35s cubic-bezier(.2,.7,.2,1),margin .35s cubic-bezier(.2,.7,.2,1),
-      opacity .25s,transform .2s cubic-bezier(.2,.7,.2,1);
+    transition:width .35s cubic-bezier(.2,.7,.2,1),margin .35s cubic-bezier(.2,.7,.2,1),opacity .25s;
   }
-  .toolbtn img{width:34px;height:34px;display:block;pointer-events:none;
-    filter:drop-shadow(0 1px 5px rgba(90,70,110,.45)) drop-shadow(0 0 10px rgba(255,210,200,.5))}
-  .toolbtn:hover{background:none;transform:scale(1.14)}
-  .toolbtn:active{transform:scale(.92)}
+  /* 图标自带柔光，不再叠投影；也没有悬停效果 */
+  .toolbtn img{width:34px;height:34px;display:block;pointer-events:none}
+  .toolbtn:hover{background:none}
   .toolbtn:focus-visible{outline:1px solid var(--coral);outline-offset:2px}
   /* * 图标一直慢慢转 */
   .toolbtn[data-tool="panel"] img{animation:spin 24s linear infinite}
@@ -332,14 +330,18 @@
     from{transform:translate(var(--x0),var(--y0)) scale(.4) rotate(0);opacity:1}
     to{transform:translate(var(--x1),var(--y1)) scale(1) rotate(var(--r));opacity:0}
   }
-  .ld-enter{
-    border:0;background:none;padding:0;text-shadow:none;
-    animation:fadeUp 1.2s ease .7s both;
-    transition:transform .35s cubic-bezier(.2,.7,.2,1),filter .35s;
-  }
-  .ld-enter:hover,.ld-enter:focus-visible{background:none;transform:scale(1.14)}
-  .ld-enter:focus{outline:none}
-  .ld-enter img{display:block;width:clamp(170px,14vw,240px);height:auto;pointer-events:none}
+  .ld-enter{width:clamp(170px,14vw,240px);animation:fadeUp 1.2s ease .7s both}
+
+  /* ---------------------------------------------------------- 图片按钮
+     常态 / 悬停各一张图叠在一起，悬停时交叉淡入 —— 没有放大、没有变色，别的效果一概不要。
+     .done 让它停在悬停那张上（「已保存」的反馈用） */
+  .imgbtn{position:relative;display:block;border:0;background:none;padding:0;text-shadow:none}
+  .imgbtn:hover{background:none}
+  .imgbtn:focus{outline:none}
+  .imgbtn img{display:block;width:100%;height:auto;pointer-events:none;transition:opacity .35s ease}
+  .imgbtn img.h{position:absolute;left:0;top:0;opacity:0}
+  .imgbtn:hover img.h,.imgbtn:focus-visible img.h,.imgbtn.done img.h{opacity:1}
+  .imgbtn:hover img.n,.imgbtn:focus-visible img.n,.imgbtn.done img.n{opacity:0}
   @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}}
   .ld-foot{
     position:absolute;left:0;right:0;bottom:clamp(16px,4vh,40px);margin:0;padding:0 24px;
@@ -397,14 +399,9 @@
   }
   .ph-frame .ph-brand{font-family:var(--serif);font-weight:600;font-size:20px;letter-spacing:.04em;color:var(--coral-deep)}
   .ph-frame .ph-date{font-size:11px;letter-spacing:.16em;color:var(--blue)}
-  .ph-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
-  .ph-actions button{
-    min-width:150px;padding:11px 18px 10px;border-radius:999px;
-    background:var(--glass);border:1px solid var(--glass-line);
-  }
-  .ph-actions button:hover{border-color:var(--coral);background:rgba(255,226,216,.45)}
-  .ph-actions button.primary{background:var(--coral);border-color:var(--coral);text-shadow:none}
-  .ph-actions button.primary:hover{background:var(--coral-deep);border-color:var(--coral-deep)}
+  /* 三张按钮图四周自带一大圈光晕，彼此靠拢一点，看起来才是一组 */
+  .ph-actions{display:flex;gap:0;flex-wrap:wrap;justify-content:center;margin-top:-18px}
+  .ph-actions .imgbtn{width:clamp(170px,14vw,240px);margin:0 -18px}
   .ph-actions button[hidden]{display:none}
 
   @media (prefers-reduced-motion:reduce){
@@ -435,9 +432,9 @@
 </div>
 
 <div id="tools">
-  <button id="helpbtn" class="toolbtn" data-tool="help" data-i18n-title="hint.toggle"><img src="assets/control.svg" alt="" /></button>
-  <button id="shotbtn" class="toolbtn" data-tool="photo" data-i18n-title="hint.photo"><img src="assets/camera.svg" alt="" /></button>
-  <button id="panelbtn" class="toolbtn" data-tool="panel" data-i18n-title="panel.toggle"><img src="assets/snow.svg" alt="" /></button>
+  <button id="helpbtn" class="toolbtn" data-tool="help" data-i18n-title="hint.toggle"><img src="assets/UI/control.png" alt="" /></button>
+  <button id="shotbtn" class="toolbtn" data-tool="photo" data-i18n-title="hint.photo"><img src="assets/UI/camera.png" alt="" /></button>
+  <button id="panelbtn" class="toolbtn" data-tool="panel" data-i18n-title="panel.toggle"><img src="assets/UI/snow.png" alt="" /></button>
 </div>
 
 <div id="help" class="hidden">
@@ -464,8 +461,9 @@
     <div class="ld-tilt" id="ldtilt">
       <img class="ld-title" id="ldtitle" src="assets/title.png" alt="Snow Day" width="1660" height="688" draggable="false" />
     </div>
-    <button id="enterbtn" class="ld-enter" data-i18n-title="land.enter" aria-label="Enter">
-      <img src="assets/enter.png" alt="" width="386" height="154" />
+    <button id="enterbtn" class="ld-enter imgbtn" data-i18n-title="land.enter" aria-label="Enter">
+      <img class="n" src="assets/UI/enter.png" alt="" width="771" height="307" />
+      <img class="h" src="assets/UI/enter-hover.png" alt="" width="771" height="307" />
     </button>
   </div>
   <p class="ld-foot" data-i18n="land.foot"></p>
@@ -484,9 +482,18 @@
       <figcaption><span class="ph-brand">Snow Day</span><span class="ph-date" id="phdate"></span></figcaption>
     </figure>
     <div class="ph-actions">
-      <button id="phsave" class="primary" data-i18n="shot.save">Save PNG</button>
-      <button id="phshare" data-i18n="shot.share" hidden>Share</button>
-      <button id="phclose" data-i18n="shot.again">Keep playing</button>
+      <button id="phsave" class="imgbtn" data-i18n-title="shot.save" aria-label="Save">
+        <img class="n" src="assets/UI/save.png" alt="" width="771" height="307" />
+        <img class="h" src="assets/UI/save-hover.png" alt="" width="771" height="307" />
+      </button>
+      <button id="phshare" class="imgbtn" data-i18n-title="shot.share" aria-label="Share" hidden>
+        <img class="n" src="assets/UI/share.png" alt="" width="771" height="307" />
+        <img class="h" src="assets/UI/share-hover.png" alt="" width="771" height="307" />
+      </button>
+      <button id="phclose" class="imgbtn" data-i18n-title="shot.again" aria-label="Back">
+        <img class="n" src="assets/UI/back.png" alt="" width="771" height="307" />
+        <img class="h" src="assets/UI/back-hover.png" alt="" width="771" height="307" />
+      </button>
     </div>
   </div>
 </div>

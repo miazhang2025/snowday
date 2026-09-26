@@ -118,6 +118,9 @@ async function share() {
   }
 }
 
+// 按钮是图片（文字画在图里），不能再改 textContent —— 那会把图冲掉。
+// 「已保存」就让它停在悬停那张图上一会儿，提示文字换进 title。
 function paintSave(saved) {
-  els.save.textContent = t(saved ? 'b.photoSaved' : 'shot.save');
+  els.save.classList.toggle('done', saved);
+  els.save.title = t(saved ? 'b.photoSaved' : 'shot.save');
 }

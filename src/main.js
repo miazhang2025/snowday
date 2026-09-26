@@ -306,42 +306,56 @@ function fillSnow(depth) {
   interaction?.setSurface(depth);
 }
 
-// ---------------------------------------------------------------- 进场飞行
+// ---------------------------------------------------------------- 进场推镜
 //
-// 点了 ENTER 之后从落地页的低机位飞回玩雪的机位。在球坐标里插值而不是直线插：
-// 落地页的镜头一直在绕圈，到点的时候可能正在对面，直线飞会从目标点边上擦过去，
-// 画面一下子怼到脸上再翻过来。方位角走短的那一边。
+// 点了 ENTER 之后，镜头**就从当时转到的那个角度**往前推进画面，不再飞回一个固定机位 ——
+// 固定机位意味着不管停在哪儿都得先绕一大圈转过去，看着像被拽走的。
+//
+//   方位角  不变；只顺着落地页自转的角速度再滑一小段，速度连续地降到 0，
+//           所以从「自转」到「推进」之间没有顿挫
+//   距离    推近到 75%
+//   仰角    落地页是贴地的低机位（约 4°），稍微抬到约 13°，好在雪上玩
+//   注视点  从落地页的注视点平移到玩雪的注视点（两者只差半米高）
+//
+// 缓动用 ease-out：一开始就带着速度，最后轻轻停住。
+
+const ENTER_T = 1.8;             // 秒
+const ENTER_PUSH = 0.75;         // 距离推到原来的多少
+const ENTER_ELEV = THREE.MathUtils.degToRad(13);
 
 let fly = null;
 const _sph0 = new THREE.Spherical();
-const _sph1 = new THREE.Spherical();
 const _sph2 = new THREE.Spherical();
 const _off = new THREE.Vector3();
 
 function flyHome() {
   _sph0.setFromVector3(_off.subVectors(camera.position, controls.target));
-  _sph1.setFromVector3(_off.subVectors(CAM_HOME, CAM_TARGET));
-  let dTheta = _sph1.theta - _sph0.theta;
-  dTheta = Math.atan2(Math.sin(dTheta), Math.cos(dTheta));
+  // OrbitControls 自转：每秒 theta 变化 -(2π/60)·autoRotateSpeed。
+  // easeOutCubic 在起点的斜率是 3/T，所以多滑 v·T/3 正好让角速度连续
+  const v = -(2 * Math.PI / 60) * controls.autoRotateSpeed;
+  const phiTo = Math.min(_sph0.phi, Math.PI / 2 - ENTER_ELEV);
   fly = {
-    t: 0, from: _sph0.clone(), dTheta, to: _sph1.clone(),
+    t: 0,
+    from: _sph0.clone(),
+    to: new THREE.Spherical(_sph0.radius * ENTER_PUSH, phiTo, _sph0.theta + v * ENTER_T / 3),
     q: controls.target.clone(),
   };
 }
 
 function stepFly(dt) {
   if (!fly) return;
-  // 飞的途中用户自己抓住镜头了 —— 让给他
+  // 推的途中用户自己抓住镜头了 —— 让给他
   if (controls.__dragging) { fly = null; return; }
-  fly.t = Math.min(1, fly.t + dt / 2.2);
-  const k = fly.t < 0.5 ? 4 * fly.t ** 3 : 1 - (-2 * fly.t + 2) ** 3 / 2;
+  fly.t = Math.min(1, fly.t + dt / ENTER_T);
+  const k = 1 - (1 - fly.t) ** 3;
   const s = _sph2.set(
     fly.from.radius + (fly.to.radius - fly.from.radius) * k,
     fly.from.phi + (fly.to.phi - fly.from.phi) * k,
-    fly.from.theta + fly.dTheta * k,
+    fly.from.theta + (fly.to.theta - fly.from.theta) * k,
   );
   controls.target.lerpVectors(fly.q, CAM_TARGET, k);
   camera.position.setFromSpherical(s).add(controls.target);
+  keepAboveGround();                 // 停在山坡那一侧时，推近的路上别钻进地里
   if (fly.t >= 1) fly = null;
 }
 

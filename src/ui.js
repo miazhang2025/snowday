@@ -25,7 +25,7 @@ const GROUPS = [
     ],
   },
   {
-    // 六个模具的按钮由 initUI 插在滑杆前面（moldPicker 这个标记）
+    // 模具的按钮由 initUI 插在滑杆前面（moldPicker 这个标记）
     key: 'g.mold',
     moldPicker: true,
     rows: [

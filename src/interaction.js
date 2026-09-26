@@ -12,11 +12,12 @@
  */
 
 import * as THREE from 'three/webgpu';
-import { U, params, HAND, SPRAY, SPRAY_BATCH, HALF, CELL0 } from './config.js';
-import { computeDeform, computeMold } from './snowfield.js';
+import { U, params, HAND, SPRAY, SPRAY_BATCH, HALF } from './config.js';
+import { computeDeform, computeMold, readSurface } from './snowfield.js';
 import { computeSprayEmit } from './snowfall.js';
 import { terrainY } from './terrain.js';
-import { MOLDS, moldHeight } from './molds.js';
+import { MOLDS, FOOT_REACH } from './molds.js';
+import { createSculptures } from './sculpt.js';
 
 const CLICK_MS = 200;      // 短于这个时间且几乎没动 → 判定为「轻点」
 const CLICK_DIST = 0.09;   // 世界单位
@@ -26,63 +27,10 @@ const smoothstep01 = (a, b, x) => {
   return t * t * (3 - 2 * t);
 };
 
-// ---------------------------------------------------------------- 已经堆好的东西（CPU 镜像）
-//
-// 模具是直接写进 GPU 高度场的，读回来太贵（一次 448² 的回读要等一整帧）。
-// 但光标必须能爬到堆好的东西上面去 —— 不然没法往塔顶上再摞一层，
-// 城堡就只能永远摊在地上，「造城堡」这件事也就不成立。
-//
-// 所以 CPU 这边留一份很轻的镜像：只记「哪个模具、放在哪、多大、朝哪、底面多高」，
-// 高度用 molds.js 里那份 JS 剖面现算。射线拾取的地面函数取它和雪面的较大者。
-//
-// 它只服务于拾取，所以不必和 GPU 逐位一致：拿手把塔推塌了这边并不知道，
-// 光标会在那儿浮一点点。比起「城堡摞不起来」，这个偏差可以接受。
-
-const MAX_BUILDS = 512;
-const BUILD_KEEP = 130;          // 超出这个距离就丢掉（GPU 的形变留存也只有 ±128m）
-
-const builds = [];
-let bMinX = 1e9, bMaxX = -1e9, bMinZ = 1e9, bMaxZ = -1e9;
-
-function rebound() {
-  bMinX = 1e9; bMaxX = -1e9; bMinZ = 1e9; bMaxZ = -1e9;
-  for (const b of builds) {
-    if (b.x - b.r < bMinX) bMinX = b.x - b.r;
-    if (b.x + b.r > bMaxX) bMaxX = b.x + b.r;
-    if (b.z - b.r < bMinZ) bMinZ = b.z - b.r;
-    if (b.z + b.r > bMaxZ) bMaxZ = b.z + b.r;
-  }
-}
-
-/** 堆好的结构在这一点的绝对高度；没有就返回 -Infinity */
-function builtAt(x, z) {
-  if (x < bMinX || x > bMaxX || z < bMinZ || z > bMaxZ) return -Infinity;
-  let best = -Infinity;
-  for (let i = 0; i < builds.length; i++) {
-    const b = builds[i];
-    const dx = x - b.x;
-    const dz = z - b.z;
-    if (dx * dx + dz * dz > b.r * b.r) continue;
-    // 世界 -> 模具局部：u 沿 axis，v 是它右手边的法向（和 molds.js 的 moldLocal 一致）
-    const h = moldHeight(b.type, (dx * b.ax + dz * b.az) / b.s, (dx * b.az - dz * b.ax) / b.s);
-    if (h > 0) {
-      const y = b.baseY + h * b.s;
-      if (y > best) best = y;
-    }
-  }
-  return best;
-}
-
-/** 观察点走远之后，把留存范围之外的记录丢掉 —— GPU 那边它们也已经没了 */
-function pruneBuilds(cx, cz) {
-  let n = 0;
-  for (const b of builds) {
-    if (Math.abs(b.x - cx) < BUILD_KEEP && Math.abs(b.z - cz) < BUILD_KEEP) builds[n++] = b;
-  }
-  if (n !== builds.length) { builds.length = n; rebound(); }
-}
-
-export function createInteraction(renderer, camera, controls, dom) {
+export function createInteraction(renderer, scene, camera, controls, dom) {
+  // 模具扣出来的雪雕（网格）。它们在 CPU 这边有一份顶面高度图，
+  // 光标能爬到雕塑顶上去 —— 下一个模具就摞在上面，城堡是这样一层层叠起来的。
+  const sculpts = createSculptures(scene, (x, z) => groundAt(x, z));
   const ray = new THREE.Raycaster();
   const ndc = new THREE.Vector2(0, 0);
   const hit = new THREE.Vector3();
@@ -117,7 +65,40 @@ export function createInteraction(renderer, camera, controls, dom) {
    * 除了地形 + 平均雪深，还要算上已经堆好的结构 —— 光标于是会爬上雪球的顶、
    * 塔楼的平台，新的模具就直接摞在上面。城堡是这样一层层叠起来的。
    */
-  const surfaceAt = (x, z) => Math.max(terrainY(x, z) + S.estY, builtAt(x, z));
+  // 真实雪面：L0 的表面高度每隔几帧异步读回一次（见 snowfield.js 的 readSurface）。
+  // 读回还没到、或者点在 L0 窗口外面，就退回「地形 + 平均雪深」的估计。
+  let field = null;
+  let fieldPending = false;
+  let fieldTick = 0;
+
+  function pollField() {
+    if (fieldPending || ++fieldTick < 4) return;
+    fieldTick = 0;
+    fieldPending = true;
+    readSurface(renderer)
+      .then((f) => { field = f; })
+      .catch(() => {})
+      .finally(() => { fieldPending = false; });
+  }
+
+  function fieldAt(x, z) {
+    const f = field;
+    if (!f) return null;
+    const fx = x / f.cell - f.ox;
+    const fz = z / f.cell - f.oz;
+    const i = Math.floor(fx);
+    const k = Math.floor(fz);
+    if (i < 1 || k < 1 || i >= f.n - 2 || k >= f.n - 2) return null;
+    const n = f.n;
+    const at = (gx, gz) => f.data[(((f.oz + gz) % n + n) % n) * n + (((f.ox + gx) % n + n) % n)];
+    const tx = fx - i, tz = fz - k;
+    const a = at(i, k) + (at(i + 1, k) - at(i, k)) * tx;
+    const b = at(i, k + 1) + (at(i + 1, k + 1) - at(i, k + 1)) * tx;
+    return a + (b - a) * tz;
+  }
+
+  const groundAt = (x, z) => fieldAt(x, z) ?? terrainY(x, z) + S.estY;
+  const surfaceAt = (x, z) => Math.max(groundAt(x, z), sculpts.builtAt(x, z));
 
   /**
    * 沿射线找和地面的交点。
@@ -216,70 +197,87 @@ export function createInteraction(renderer, camera, controls, dom) {
     U.moldAxis.value.set(ax * cs - az * sn, ax * sn + az * cs);
   }
 
-  // 正在「长」出来的模具。盖章不是一帧完成的：每个模具在 GROW_T 秒里
-  // 从底面升到全高，期间每帧重跑一遍 computeMold（它的合并是幂等的 max，
-  // 反复盖不会越盖越高）。拖着连放的时候会有好几个同时在长。
-  const GROW_T = 0.32;
-  const growing = [];
+  // 高度场上的盖章：雕塑脚下那圈压实的雪。
+  // 不是一帧盖完的 —— 在 STAMP_T 秒里把 moldGrow 从 0 推到 1，每帧重跑一遍
+  // computeMold（它的合并是幂等的 max，反复盖不会越盖越高）。
+  const STAMP_T = 0.32;
+  const stamps = [];
 
-  function stampMold(g, k) {
+  function runStamp(g, k) {
     U.moldPos.value.set(g.x, g.baseY, g.z);
     U.moldAxis.value.set(g.ax, g.az);
     U.moldBase.value = g.baseY;
     U.moldScale.value = g.s;
     U.moldType.value = g.type;
-    U.moldBlur.value = g.blur;
-    U.moldReach.value = g.r + g.blur + g.s * 0.35;
+    U.moldPadH.value = g.padH;
+    U.moldPadW.value = g.padW;
+    // 贴地截面的图集覆盖 ±FOOT_REACH，影响半径至少要到那儿
+    U.moldReach.value = (FOOT_REACH + g.padW + 0.1) * g.s;
     U.moldGrow.value = k;
     renderer.compute(computeMold);
   }
 
-  function stepGrowing(dt) {
-    if (!growing.length) return;
+  function stepStamps(dt) {
+    if (!stamps.length) return;
     let n = 0;
-    for (const g of growing) {
-      g.t = Math.min(1, g.t + dt / GROW_T);
-      // easeOutCubic：先快后慢，最后轻轻「落定」
-      const k = 1 - Math.pow(1 - g.t, 3);
-      stampMold(g, k);
-      if (g.t < 1) growing[n++] = g;
+    for (const g of stamps) {
+      g.t = Math.min(1, g.t + dt / g.dur);
+      runStamp(g, 1 - Math.pow(1 - g.t, 3));      // easeOutCubic
+      if (g.t < 1) stamps[n++] = g;
     }
-    growing.length = n;
-    // 预览描边读的也是这几个 uniform，盖完章把它们交还给光标
-    U.moldGrow.value = 1;
-    U.moldScale.value = Math.max(0.05, params.moldSize);
+    stamps.length = n;
+  }
+
+  /** 把「当前光标处的模具」写进预览用的 uniform（盖章会借用它们，每帧还回来） */
+  function setPreviewUniforms(s) {
+    U.moldPos.value.copy(S.cur);
+    U.moldScale.value = s;
     U.moldType.value = params.mold;
   }
 
   function placeMold() {
     const M = MOLDS[params.mold] || MOLDS[0];
     const s = Math.max(0.05, params.moldSize);
-    // 底面比雪面低一点点，模具的脚是「陷进雪里」而不是「摆在雪上」的
-    const base = surfaceAt(S.cur.x, S.cur.z) - s * 0.05;
+    const x = S.cur.x, z = S.cur.z;
+    const ax = U.moldAxis.value.x, az = U.moldAxis.value.y;
+    // 底面取底座范围里最低的那一点：落在雪堆的坡上时，低的那一侧也不会悬空
+    // （高的那一侧只是多埋进雪里一点）
+    let ground = groundAt(x, z);
+    const px = -az, pz = ax;
+    for (const [u, v] of [[0.8, 0], [-0.8, 0], [0, 0.8], [0, -0.8],
+      [0.55, 0.55], [0.55, -0.55], [-0.55, 0.55], [-0.55, -0.55]]) {
+      const lu = u * M.foot[0] * s, lv = v * M.foot[1] * s;
+      ground = Math.min(ground, groundAt(x + ax * lu + px * lv, z + az * lu + pz * lv));
+    }
+    const info = sculpts.builtInfo(x, z);
+    const stackedOn = info.y > groundAt(x, z) + 0.02 ? info.sc : null;
+    const top = info.y;
+    // 底面比雪面低一点：脚是「陷进雪里」而不是「摆在雪上」的
+    const base = (stackedOn ? top : ground) - s * 0.04;
 
-    const b = {
-      x: S.cur.x, z: S.cur.z,
-      ax: U.moldAxis.value.x, az: U.moldAxis.value.y,
-      s, baseY: base, type: params.mold, r: M.foot * s + 0.05,
-    };
+    // 摞在上面 / 挨着放 会合并进已有的那一座（见 sculpt.js 的 place）
+    sculpts.place(params.mold, x, z, ax, az, s, base, stackedOn);
 
-    // 滤波半径：至少一格多一点（去锯齿），模具越高越宽（墙带一点收分）
-    growing.push({ ...b, t: 0, blur: CELL0 * 1.1 + M.top * s * 0.05 });
+    // 雕塑脚下和地面的圆角已经长在网格里了；这里再在高度场上压一圈薄薄的实雪，
+    // 把两者的交线埋住。摞在别的雕塑上面时，底下的高度场够不着，不盖。
+    if (!stackedOn) {
+      stamps.push({
+        x, z, ax, az, s, baseY: base, type: params.mold,
+        padH: 0.08, padW: 0.30, t: 0, dur: STAMP_T,
+      });
+    }
 
-    // CPU 镜像直接按最终形状记 —— 光标马上就能爬上去接着摞
-    if (builds.length >= MAX_BUILDS) builds.shift();
-    builds.push(b);
-    rebound();
-
-    S.lastPX = S.cur.x;
-    S.lastPZ = S.cur.z;
+    S.lastPX = x;
+    S.lastPZ = z;
     S.hasPlaced = true;
   }
 
   // ------------------------------------------------------------ 每帧
 
   function update(dt) {
-    stepGrowing(dt);
+    pollField();
+    stepStamps(dt);
+    sculpts.update(dt);
 
     // 平均雪面高度：跟 computeAccumulate 用同一条收敛规则
     const target = Math.max(params.depth, 1e-4);
@@ -290,6 +288,10 @@ export function createInteraction(renderer, camera, controls, dom) {
 
     ray.setFromCamera(ndc, camera);
     S.hasHit = raycastGround(ray.ray.origin, ray.ray.direction, hit);
+    // 雪雕直接拿网格求交。地面步进的步长在几米外会涨到大半米，
+    // 射线擦过塔顶的那一小段会被一步跨过去 —— 往上摞就点不中了。
+    const sculptHit = sculpts.raycast(ray.ray, S.hasHit ? ray.ray.origin.distanceTo(hit) + 0.3 : 400);
+    if (sculptHit) { hit.copy(sculptHit.point); S.hasHit = true; }
 
     if (S.hasHit) {
       // 可交互的只有 L0 那 26m 的窗口，而窗口是跟着相机走的
@@ -320,23 +322,34 @@ export function createInteraction(renderer, camera, controls, dom) {
 
     // ---- 模具 ----
     if (molding) {
+      sculpts.setBrush(false);
       updateMoldAxis();
-      U.moldPos.value.copy(S.cur);
-      U.moldScale.value = Math.max(0.05, params.moldSize);
-      U.moldType.value = params.mold;
-      U.moldActive.value = live ? 1 : 0;
-
-      // 按住不放拖着走 = 连着扣一排。间距取模具自己的包围半径，
-      // 相邻两个刚好挨上；软并集会把它们焊成连续的一道墙。
       const M = MOLDS[params.mold] || MOLDS[0];
-      const spacing = M.foot * Math.max(0.05, params.moldSize) * 1.05;
-      const far = S.hasPlaced
-        && Math.hypot(S.cur.x - S.lastPX, S.cur.z - S.lastPZ) > spacing;
+      const s = Math.max(0.05, params.moldSize);
+      setPreviewUniforms(s);
+      U.moldActive.value = live ? 1 : 0;
+      sculpts.setGhost(live, params.mold, S.cur.x, S.cur.y - s * 0.05, S.cur.z,
+        U.moldAxis.value.x, U.moldAxis.value.y, s);
+
+      // 按住不放拖着走 = 连着扣一排。间距取底座沿拖动方向的投影长度，
+      // 相邻两个刚好挨上：城墙首尾相接，雪人一个挨一个。
+      let far = false;
+      if (S.hasPlaced) {
+        const ddx = S.cur.x - S.lastPX, ddz = S.cur.z - S.lastPZ;
+        const d = Math.hypot(ddx, ddz);
+        if (d > 1e-4) {
+          const ax = U.moldAxis.value.x, az = U.moldAxis.value.y;
+          const along = Math.abs((ddx * ax + ddz * az) / d);
+          const side = Math.abs((ddz * ax - ddx * az) / d);
+          far = d > (along * M.foot[0] + side * M.foot[1]) * 2 * s;
+        }
+      }
       if ((S.placeReq || (S.down && far)) && S.inField && S.hasHit) placeMold();
       S.placeReq = false;
       return;                       // 拿着模具的时候手不在场上，下面那些都不跑
     }
 
+    sculpts.setGhost(false);
     U.moldActive.value = 0;
     S.placeReq = false;
 
@@ -347,6 +360,23 @@ export function createInteraction(renderer, camera, controls, dom) {
         S.engaged = true;
       }
     }
+
+    // ---- 手在雪雕上 ----
+    // 射线先打到雪雕就改雪雕的距离场（抚平 / 推 / 堆），不碰高度场。
+    // 光标也换成一个贴在雕塑表面上的笔刷球。
+    const onSculpt = live ? sculptHit : null;
+    if (onSculpt) {
+      const R = U.handRadius.value * 0.5;
+      U.handActive.value = 0;
+      sculpts.setBrush(true, onSculpt.point, R);
+      if (S.engaged) {
+        const m = params.mode === HAND.PUSH ? 'push' : params.mode === HAND.PILE ? 'pile' : 'smooth';
+        sculpts.brush(onSculpt.sc, onSculpt.point, R, m, dt);
+      }
+      S.stamp = false;
+      return;
+    }
+    sculpts.setBrush(false);
 
     if (S.engaged && S.inField) {
       U.handMode.value = params.mode;
@@ -376,16 +406,16 @@ export function createInteraction(renderer, camera, controls, dom) {
   /** 清空/铺满之后重置雪面高度估计。堆好的东西也一起没了。 */
   function setSurface(y) {
     S.estY = y;
-    builds.length = 0;
-    growing.length = 0;
-    rebound();
+    field = null;
+    sculpts.clear();
+    stamps.length = 0;
   }
 
   /** clipmap 窗口中心，每帧由 main.js 告知 */
   function setCenter(x, z) {
     center.set(x, z);
-    pruneBuilds(x, z);
+    sculpts.prune(x, z);
   }
 
-  return { update, setSurface, setCenter, state: S, builds };
+  return { update, setSurface, setCenter, state: S, sculpts };
 }

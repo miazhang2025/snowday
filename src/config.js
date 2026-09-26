@@ -169,10 +169,12 @@ export const U = {
   moldAxis:      uniform(new THREE.Vector2(0, 1)),  // 朝向（单位向量，xz）
   moldBase:      uniform(0),                        // 模具 y=0 那一面的绝对高度
   moldScale:     uniform(0.55),                     // 归一化单位 -> 米
-  moldType:      uniform(0),
-  moldActive:    uniform(0),                        // 是否画预览轮廓
+  moldActive:    uniform(0),                        // 是否画预览（雪面上的底座轮廓 + 半透明虚影）
+  // 高度场上的「底座」：雕塑脚下那圈压实的雪
+  moldType:      uniform(0),                        // 哪个模具（查贴地截面图集）
+  moldPadH:      uniform(0.09),                     // 底座高度（归一化）
+  moldPadW:      uniform(0.30),                     // 往外那圈凹圆角的宽度（归一化）
   moldGrow:      uniform(1),                        // 盖章动画进度 0..1（已缓动）
-  moldBlur:      uniform(0.06),                     // 盖章时的滤波半径（米）
   moldReach:     uniform(1),                        // 盖章影响半径（米），之外的格子直接跳过
   // 压实的雪能挺住多陡的坡。松雪的休止角只有三十几度，塔一堆好就塌了；
   // 手压过的雪能立成墙，这是模具扣出来的东西能站住的**唯一**原因，所以直接乘在休止角上。
@@ -302,7 +304,6 @@ export function refresh() {
 
   // --- 模具 -------------------------------------------------------
   U.moldScale.value = p.moldSize;
-  U.moldType.value = p.mold;
   U.packRepose.value = 1.5 + p.moldFirm * 20.0;
 
   // --- 环境 -------------------------------------------------------

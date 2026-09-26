@@ -171,7 +171,7 @@ async function init() {
   postfx = createPostFX(renderer, scene, camera, lights.sun);
 
   // --- 交互 ---
-  interaction = createInteraction(renderer, camera, controls, renderer.domElement);
+  interaction = createInteraction(renderer, scene, camera, controls, renderer.domElement);
 
   // --- UI ---
   initUI({
@@ -257,7 +257,7 @@ async function init() {
   window.__snow = {
     THREE, renderer, scene, camera, controls, lights, env, postfx, params, U, refresh, applySettings,
     // 放模型：await __snow.loadModel('assets/cabin.glb', { scale: 2, center: true })
-    fillSnow, props,
+    fillSnow, props, interaction,
     loadModel: (url, opts) => loadModel(scene, url, opts),
     unloadModel: (root) => unloadModel(scene, root),
   };
@@ -498,11 +498,13 @@ function animate() {
   renderer.compute(computeFlakeUpdate);
   renderer.compute(computeSprayUpdate);
 
-  // 快门期间把光标环和模具预览按掉（见 takeShot 那段注释）
+  // 快门期间把光标环、模具预览、笔刷球按掉（见 takeShot 那段注释）
   const shooting = shotFrames > 0;
   const keepHand = U.handActive.value;
   const keepMold = U.moldActive.value;
-  if (shooting) { U.handActive.value = 0; U.moldActive.value = 0; }
+  const brushBall = interaction.sculpts.brushBall;   // 手在雪雕上时的笔刷球
+  const keepBrush = brushBall.visible;
+  if (shooting) { U.handActive.value = 0; U.moldActive.value = 0; brushBall.visible = false; }
 
   maybeBakeEnv();
   postfx.render();
@@ -510,6 +512,7 @@ function animate() {
   if (shooting) {
     U.handActive.value = keepHand;
     U.moldActive.value = keepMold;
+    brushBall.visible = keepBrush;
     shotFrames -= 1;
     if (shotFrames === 0) saveFrame();
   }

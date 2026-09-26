@@ -53,7 +53,7 @@ const DICT = {
       + '<div class="hk"><span><em>Right-drag</em></span><b>orbit</b></div>'
       + '<div class="hk"><span><em>Middle</em></span><b>pan</b></div>'
       + '<div class="hk"><span><em>Wheel</em></span><b>zoom</b></div>'
-      + '<div class="hk"><span><em>Mold</em></span><b>click to press · drag for a row · stack on top</b></div>'
+      + '<div class="hk"><span><em>Mold</em></span><b>click to press · drag for a row · stack or line up to merge · smooth, push or pile right on it</b></div>'
       + '<div class="hk"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><b>walk</b></div>'
       + '<div class="hk"><span><kbd>Q</kbd><kbd>E</kbd></span><b>down / up</b></div>'
       + '<div class="hk"><span><kbd>shift</kbd></span><b>sprint</b></div>'
@@ -82,6 +82,9 @@ const DICT = {
     'm.mold': 'Mold',
 
     'mold.ball': 'Ball',
+    'mold.snowman': 'Snowman',
+    'mold.duck': 'Duck',
+    'mold.bunny': 'Bunny',
     'mold.tower': 'Tower',
     'mold.wall': 'Wall',
     'mold.igloo': 'Igloo',
@@ -183,7 +186,7 @@ const DICT = {
       + '<div class="hk"><span><em>右键拖动</em></span><b>转视角</b></div>'
       + '<div class="hk"><span><em>中键</em></span><b>平移</b></div>'
       + '<div class="hk"><span><em>滚轮</em></span><b>缩放</b></div>'
-      + '<div class="hk"><span><em>模具</em></span><b>点一下扣一坨 · 拖着连成一排 · 扣在上面往上摞</b></div>'
+      + '<div class="hk"><span><em>模具</em></span><b>点一下扣一个 · 拖着连成一排 · 摞上去或挨着放会长在一起 · 可以直接抚平、推、堆</b></div>'
       + '<div class="hk"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><b>走动</b></div>'
       + '<div class="hk"><span><kbd>Q</kbd><kbd>E</kbd></span><b>降 / 升</b></div>'
       + '<div class="hk"><span><kbd>shift</kbd></span><b>加速</b></div>'
@@ -212,6 +215,9 @@ const DICT = {
     'm.mold': '模具',
 
     'mold.ball': '雪球',
+    'mold.snowman': '雪人',
+    'mold.duck': '小鸭',
+    'mold.bunny': '小兔',
     'mold.tower': '塔楼',
     'mold.wall': '城墙',
     'mold.igloo': '雪屋',

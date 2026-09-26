@@ -26,7 +26,7 @@
 
 import * as THREE from 'three/webgpu';
 import {
-  Fn, If, Loop, float, int, uint, vec2, vec3, vec4,
+  Fn, If, float, int, uint, vec2, vec3, vec4,
   instancedArray, instanceIndex, vertexIndex, uniform,
   positionLocal, positionWorld, cameraPosition,
   varying, smoothstep, mix, select, hash, mx_noise_float, mx_fractal_noise_float,
@@ -39,7 +39,7 @@ import {
 } from './config.js';
 import { terrainSample } from './terrain.js';
 import { groundAlbedo, groundNormalXY, groundRough } from './ground.js';
-import { moldLocal, moldShape } from './molds.js';
+import { moldLocal, padSd } from './molds.js';
 
 // ---------------------------------------------------------------- 通用小工具
 
@@ -277,6 +277,8 @@ function createLevel(k, coarse) {
     gy: z.div(cell).sub(ocy.toFloat()).add(0.5).floor().toInt(),
   });
   const surfAt = (x, z) => { const n = nearest(x, z); return at(surf, n.gx, n.gy); };
+  /** 世界 xz 处任意一个缓冲区的值（本级窗口里最近的那一格） */
+  const sampleAt = (buf, x, z) => { const n = nearest(x, z); return at(buf, n.gx, n.gy); };
   const lightAt = (x, z) => { const n = nearest(x, z); return at(lightB, n.gx, n.gy); };
   /** 世界 xz 是否落在本级窗口内（留一格余量） */
   const insideWindow = (x, z) => {
@@ -504,99 +506,63 @@ function createLevel(k, coarse) {
     })().compute(CELLS);
   }
 
-  // ---------------------------------------------------------------- 模具（也只有 L0）
+  // ---------------------------------------------------------------- 模具底座（也只有 L0）
   //
-  // 「盖章」：把 molds.js 里那个归一化的高度剖面按当前的落点 / 朝向 /
-  // 尺度摆好，和已有的雪取并集。
+  // 雕塑本体是 sculpt.js 里的网格（脚下和地面的圆角也长在网格里），
+  // 这里只在高度场上沿雕塑真实的贴地截面压一圈薄薄的实雪，把网格和雪面的交线埋住。
   //
-  // 几件事让它看起来是「堆出来的」而不是「贴上去的」：
+  // 剖面只有一个公式：q = 1 - clamp(sd / padW)，高度 = padH·q² - 0.4·(1-q)²。
+  // 轮廓里面 q = 1 是平顶，外面二次衰减，外缘继续往下探（底面是按周围最低点定的，
+  // 别处的雪面可能更低，往下探才总能顺顺地接上）。
   //
-  //   1. 超采样滤波。剖面本身是阶跃的（塔墙从 0.3 直接跳到 2.16），
-  //      直接逐格点采样，轮廓就是一圈 5.8cm 的锯齿 —— 而且锯齿的**高度**
-  //      就是墙高，东西越高越难看。这里在每格周围 5x5 取样、按帐篷权重平均，
-  //      等于把剖面先做了一次低通：竖墙变成一两格宽的陡坡，锯齿消失。
-  //      滤波半径随模具高度加大（moldBlur），高墙顺便带一点向内收的「收分」，
-  //      正是沙模 / 雪模扣出来的真实样子，也更扛休止角。
-  //   2. 脚下的圆角（flare）。沿轮廓外侧长一圈凹圆角，只在周围确实有雪托着的
-  //      地方长 —— 摞在塔顶上时就只在平台上长，不会从半空垂下一圈裙边。
-  //   3. 抖动 + 起伏。局部坐标先被噪声推开一点（轮廓不再是完美的圆），
-  //      高度再叠两层噪声（表面不再是数学曲面）。手拍出来的雪就是这样。
-  //   4. 压实度写满。于是它在着色上走「压实雪」那一档 —— 偏蓝、更致密、
-  //      不闪冰晶、没有风壳；同时休止角被抬高，塔才立得住（见 computeRelax）。
+  // interaction.js 会在 ~0.3s 里把 moldGrow 从 0 推到 1，每帧都跑一遍这个 pass，
+  // 所以合并必须是**幂等**的 max —— 反复盖同一个章不能越盖越高。
   //
-  // 盖章不是一帧完成的：interaction.js 会在 ~0.3s 里把 moldGrow 从 0 推到 1，
-  // 每帧都跑一遍这个 pass，雪是「长」出来的而不是「啪」一下出现的。
-  // 所以这里的合并必须是**幂等**的纯 max —— 反复盖同一个章不能越盖越高。
-  // （以前的软并集每盖一次都会在接缝处再垫高一点，没法逐帧重复。）
-  //
-  // 高度是**绝对**的：moldBase 是模具 y=0 那一面的世界高度，减掉本格的地形
-  // 才是雪深。这样斜坡上扣出来的塔是竖直的，不会跟着坡被剪切。
+  // 高度是**绝对**的：moldBase 是底面的世界高度，减掉本格的地形才是雪深。
+  // 摞在别的雕塑上时不盖（interaction.js 里判断）—— 底下的高度场够不着。
   let computeMold = null;
   if (isFine) {
     computeMold = Fn(() => {
       const w = cw;
 
-      // 影响范围之外直接跳过：一次盖章只动模具底下那一小块
       If(w.sub(U.moldPos.xz).length().lessThan(U.moldReach), () => {
-        // 轮廓抖动：一格出头的量，刚好把「机器切出来的边」揉掉又不糊掉造型
+        // 轮廓抖动：一格出头的量，把「机器切出来的边」揉掉
         const jx = noised(w.mul(14.0)).x.sub(0.5);
         const jz = noised(w.mul(14.0).add(vec2(51.7, 19.3))).x.sub(0.5);
-        const wj = w.add(vec2(jx, jz).mul(U.moldScale.mul(0.05)));
+        const wj = w.add(vec2(jx, jz).mul(U.moldScale.mul(0.06)));
+        const sd = padSd(moldLocal(wj));
 
-        // ---- 5x5 帐篷滤波 ----
-        const hSum = float(0).toVar();   // 高度（归一化）
-        const mSum = float(0).toVar();   // 在轮廓里、且确实有高度
-        const step = U.moldBlur.mul(0.5);
-        Loop({ start: 0, end: 25, type: 'int' }, ({ i }) => {
-          const ix = i.mod(5).sub(2);
-          const iy = i.div(5).sub(2);
-          const wt = float(3).sub(ix.abs().toFloat()).mul(float(3).sub(iy.abs().toFloat()));
-          const s = moldShape(moldLocal(wj.add(vec2(ix.toFloat(), iy.toFloat()).mul(step))));
-          hSum.addAssign(s.x.mul(wt));
-          mSum.addAssign(select(s.y.lessThan(0.0).and(s.x.greaterThan(0.02)), float(1), float(0)).mul(wt));
-        });
-        const hN = hSum.div(81.0);
-        const cover = mSum.div(81.0);
-
-        // 中心那一点的有向距离，给脚下圆角用（归一化单位，>0 在外面）
-        const sd = moldShape(moldLocal(wj)).y;
+        const q = float(1).sub(sd.div(U.moldPadW).clamp(0, 1));
+        const lumps = noised(w.mul(8.0)).x.sub(0.5).mul(0.03)
+          .add(noised(w.mul(29.0)).x.sub(0.5).mul(0.010));
+        // 外缘不是停在底面高度，而是继续往下探 0.4 个模具尺寸：
+        // 底面是按「平均雪深」估的，这里的雪面可能低几厘米 —— 停在底面高度的话，
+        // 外缘就是一道台阶；往下探，就总能顺顺地接上真实的雪面。
+        const iq = float(1).sub(q);
+        const rise = q.mul(q).mul(U.moldPadH).sub(iq.mul(iq).mul(0.40))
+          .mul(U.moldScale).add(lumps.mul(q));
 
         const ty = terrainSample(w).x.toVar();
         const h0 = height.element(instanceIndex);
-        const grow = U.moldGrow;
+        const want = U.moldBase.add(rise.mul(U.moldGrow)).sub(ty).max(0);
 
-        const lumps = noised(w.mul(8.0)).x.sub(0.5).mul(0.055)
-          .add(noised(w.mul(29.0)).x.sub(0.5).mul(0.016));
-        const body = U.moldBase.add(hN.mul(U.moldScale).add(lumps.mul(cover)).mul(grow));
-
-        // 脚下的凹圆角：轮廓外 0.3 个模具半径内，从 0.14 个半径高平滑落到 0
-        const fq = float(1).sub(sd.div(0.30).clamp(0, 1));
-        const flareH = fq.mul(fq).mul(0.14).mul(U.moldScale).mul(grow);
-        // 只在周围本来就有雪托着的地方长（摞到塔顶上时不从半空挂下来）
-        const support = smoothstep(U.moldScale.mul(-0.12), float(0), ty.add(h0).sub(U.moldBase));
-        const flare = U.moldBase.add(flareH).sub(float(1).sub(support).mul(10.0));
-
-        const want = body.max(flare).sub(ty).max(0);
         const nh = h0.max(want).clamp(0, U.buildCeil);
         height.element(instanceIndex).assign(nh);
         surf.element(instanceIndex).assign(ty.add(nh));
 
-        // 夯实：轮廓内部把压实度写满 1.0。它同时管着色（压实雪偏蓝、更致密、
-        // 不闪冰晶、没有风壳）和休止角（见 computeRelax 里那道 0.955 的门槛）。
-        // 「压得多实」由 U.packRepose 一个人调，这里必须是整 1.0 ——
-        // 写成 0.98 就踩在门槛边上，塌不塌全看噪声，非常难查。
-        // 滤波出来的边缘那一两格（cover 低）不夯实，让它像松雪一样软软地塌成坡脚。
-        const mask = smoothstep(0.30, 0.60, cover);
-        // 脚下圆角是手拍上去的，半实 —— 看得出压过，但会慢慢塌软
-        const touched = mask.max(select(flareH.greaterThan(0.002), support.mul(0.6), float(0)));
+        // 压实度：轮廓里面正好写满 1.0（踩过 computeRelax 那道 0.955 的门槛，雪垫挺得住）。
+        // 外圈露在外面的那一截只给 0.3 —— 压实度直接决定颜色（越实越蓝），
+        // 给高了雕塑脚下就是一圈发蓝的环，又是一道分界。它会慢慢软下去，正好。
+        const k = q;
+        const pk = select(sd.lessThan(0.0), float(1), float(0.3));
         const p0 = packed.element(instanceIndex);
-        packed.element(instanceIndex).assign(p0.max(touched).clamp(0, 1));
+        packed.element(instanceIndex).assign(p0.max(pk.mul(k)).clamp(0, 1));
         const cr0 = crust.element(instanceIndex);
-        crust.element(instanceIndex).assign(cr0.mul(float(1).sub(touched)).clamp(0, 1));
+        crust.element(instanceIndex).assign(cr0.mul(float(1).sub(k)).clamp(0, 1));
 
-        // 记进「碰过」通道 —— 形变留存只存碰过的格子，走开再回来城堡还在
+        // 记进「碰过」通道 —— 形变留存只存碰过的格子，走开再回来还在
         const tc0 = touchBuf.element(instanceIndex);
-        touchBuf.element(instanceIndex).assign(tc0.max(touched).clamp(0, 1));
+        touchBuf.element(instanceIndex).assign(tc0.max(k).clamp(0, 1));
       });
     })().compute(CELLS);
   }
@@ -684,7 +650,7 @@ function createLevel(k, coarse) {
     k, cell, rel, isFine,
     height, packed, crust, surf, lightB,
     oc, ocx, ocy, touchBuf,
-    at, bufOf, cl, worldOf, surfAt, lightAt, insideWindow,
+    at, bufOf, cl, worldOf, surfAt, lightAt, sampleAt, insideWindow,
     computeRefresh, computeFill, computeRelax, computeAccumulate,
     computeDeform, computeMold, computeLighting,
     mesh: null,
@@ -700,6 +666,222 @@ function createLevel(k, coarse) {
  * 这就是深雪、雪洞、压实的雪会发蓝的**唯一**原因，不是什么美术偏好。
  */
 const ICE_ABSORB = [0.34, 0.065, 0.017];
+
+// ---------------------------------------------------------------- 雪面着色（地面和雪雕共用）
+//
+// 下面这几块原来都写在雪地材质里。雪雕要和地上的雪看起来是**同一种雪**，就不能另写一份
+// 「差不多」的 —— 两份公式哪怕只差一个常数，接缝两侧就是两种颜色，一眼就是分界。
+// 所以抽出来，两边调同一个函数；输入也尽量是同一个量
+// （雪雕贴地的部分直接读地面的缓冲区，见 sculpt.js）。
+//
+// 参数都是节点。p2 是「投影到某个平面上的世界坐标」：地面永远是 xz，
+// 雪雕做三平面投影，朝上的面也走 xz —— 所以风纹、颗粒、闪点在接缝处是连续的。
+
+/** 有效光程：雪深 x 密度（越密单位厚度里散射次数越多）x 凹陷加成 */
+export const scatterPathOf = (dep, pk, crust, cav) => {
+  const dens = float(1)
+    .add(pk.clamp(0, 1).mul(1.8))      // 压实的雪最密
+    .add(crust.clamp(0, 1).mul(0.6));  // 风壳次之
+  const d = dep.div(0.20).clamp(0.06, 3.0);
+  return U.sssPath.mul(d).mul(dens).mul(cav.max(0).mul(U.sssCavity).add(1.0));
+};
+
+/** Beer-Lambert：出射光谱 */
+export const iceTransmitOf = (path) => vec3(
+  path.mul(-ICE_ABSORB[0]).exp(),
+  path.mul(-ICE_ABSORB[1]).exp(),
+  path.mul(-ICE_ABSORB[2]).exp(),
+);
+
+/**
+ * 极细的颗粒：雪不是一张均匀的白纸，近看有糖粒一样的明暗。
+ * 210 周期/米（波长 5mm），按像素足迹关掉，否则会烂成噪点。
+ */
+export const snowGrit = (p2) => {
+  const gritK = float(1).sub(smoothstep(0.004, 0.016, fwidth(p2).length()));
+  return noised(p2.mul(210.0)).x.sub(0.5).mul(0.055)
+    .add(noised(p2.mul(41.0)).x.sub(0.5).mul(0.035))
+    .mul(gritK);
+};
+
+/**
+ * 反照率：新雪 / 风壳 / 压实雪三态 + 颗粒。
+ * 漫反射本身就是多次散射的结果，所以反照率也带上吸收造成的偏蓝 ——
+ * 归一化到蓝通道，只改色相、不整体压暗。
+ */
+export const snowAlbedo = (pk, crust, grit, tr) => {
+  const p = pk.clamp(0, 1);
+  const cr = crust.clamp(0, 1).mul(float(1).sub(p));   // 手压过的地方风壳早碎了
+  const fresh = vec3(0.900, 0.932, 0.980);    // 新粉雪：最白
+  const crustC = vec3(0.878, 0.914, 0.968);   // 风壳：略灰、略致密
+  const packC = vec3(0.700, 0.775, 0.900);    // 压实雪：暗且偏蓝
+  const c = mix(mix(fresh, crustC, cr), packC, p.mul(0.80)).add(grit);
+  const hue = tr.div(tr.z.max(1e-3)).clamp(0, 1);
+  return c.mul(mix(vec3(1, 1, 1), hue, U.sssTint));
+};
+
+/** 粗糙度：新雪是无数松散冰晶面 → 中等粗糙；风壳被风磨过、压实雪被压过 → 更光滑 */
+export const snowRoughness = (pk, crust, p2) => {
+  const p = pk.clamp(0, 1);
+  const cr = crust.clamp(0, 1).mul(float(1).sub(p));
+  const n = noised(p2.mul(3.5)).x.sub(0.5).mul(0.10);
+  return mix(mix(float(0.68), float(0.38), cr), float(0.30), p.mul(0.9)).add(n).clamp(0.13, 0.92);
+};
+
+/**
+ * 风纹 + 雪粒的法线扰动：返回 p2 所在平面里的梯度（调用方负责映射回世界轴，
+ * 地面上就是 (-g.x, 0, -g.y)）。
+ *
+ * 风纹最细的那一层是 19 周期/米（波长 5cm）。26m 的场地里它是「雪的质感」，
+ * 铺到 400m 之后一个像素里要过好几个周期 —— 直接烂成条纹摩尔纹。
+ *
+ * 淡出的判据不该是距离，而是**一个像素在雪面上覆盖多少米**。
+ * 同样 40m 远，俯视和掠视的像素足迹能差十倍：先前用距离拍的阈值，
+ * 站高了往下看时近处的雪就早早糊平了，画面下半截一片死白。
+ * fwidth 直接把这个足迹给出来，分辨率、视场角、掠射角一并算进去了。
+ *
+ * 阈值故意放在「一个像素约 3–14cm」而不是严格的奈奎斯特（2.5cm）。
+ * 严格按奈奎斯特淡出的话，贴地平视时 10m 外的风纹就没了 —— 而那正是
+ * 这个场景最好看的一档质感。留一点点混叠交给 TRAA，视觉上划算得多；
+ * 何况亚像素的法线方差已经在 roughness 里按距离折算成粗糙度了。
+ */
+export const windGrainGrad = (p2, crust, dep, pk) => {
+  const foot = fwidth(p2).length();
+  const near = float(1).sub(smoothstep(0.030, 0.140, foot));
+
+  // 转到风向坐标系：风纹垂直于风向、顺风被拉长
+  const wv = U.wind.xz.add(vec2(1e-4, 0));
+  const wl = wv.length().max(1e-4);
+  const cwd = wv.x.div(wl);
+  const swd = wv.y.div(wl);
+  const q = vec2(p2.x.mul(cwd).add(p2.y.mul(swd)), p2.x.mul(swd).negate().add(p2.y.mul(cwd)));
+
+  const F1X = 5.0, F1Y = 19.0, F2X = 13.0, F2Y = 47.0;
+  const n1 = noised(vec2(q.x.mul(F1X), q.y.mul(F1Y)));
+  const n2 = noised(vec2(q.x.mul(F2X), q.y.mul(F2Y)).add(vec2(31.7, 11.3)));
+
+  // 风壳把细颗粒糊平，只留下大尺度的风棱
+  const fine = float(1).sub(crust.clamp(0, 1).mul(0.55));
+  const gqx = n1.y.mul(F1X).add(n2.y.mul(F2X * 0.40).mul(fine));
+  const gqy = n1.z.mul(F1Y).add(n2.z.mul(F2Y * 0.40).mul(fine));
+  const gx = gqx.mul(cwd).sub(gqy.mul(swd));
+  const gz = gqx.mul(swd).add(gqy.mul(cwd));
+
+  // 风纹强弱跟着雪的厚度走，压实过的地方变平
+  const relief = dep.div(U.targetDepth.max(0.02)).clamp(0, 1.4).mul(0.7).add(0.42);
+  const grain = float(0.0062).mul(relief).mul(float(1).sub(pk.clamp(0, 1).mul(0.72)));
+  return vec2(gx, gz).mul(grain).mul(near).mul(U.microRelief);
+};
+
+/**
+ * 冰晶闪烁 + 逆反射 + 掠射光泽（走 emissive）。
+ *   N       着色法线（世界）
+ *   p2      闪点格子所在平面的世界坐标
+ *   sunVis  太阳可见度（高度场自遮挡；shadow map 这里拿不到）
+ *   sky     天空遮蔽
+ *   cover   有没有雪（地面露土的地方是 0）
+ *
+ * 注意：冰晶走 emissive 通道，而 emissive 在光照之前就求值了，拿不到 shadow map，
+ * 所以石头/树投下的影子里雪面照样会闪。试过用 toVar 把 receivedShadowNode 的结果
+ * 截获出来，求值顺序不配合，没成。
+ */
+export const snowSparkle = (N, p2, pk, crust, sunVis, sky, cover) => {
+  const V = cameraPosition.sub(positionWorld).normalize();
+  const Lv = U.sunDir;
+  const Hv = Lv.add(V).normalize();
+
+  // 表层松散冰晶的密度。新雪最多；被压实或被风烧结成壳之后就没有了 ——
+  // 所以推过的地方不闪，刚落的雪最闪。
+  const hoar = float(1)
+    .sub(pk.clamp(0, 1).mul(0.92))
+    .sub(crust.clamp(0, 1).mul(0.50))
+    .clamp(0, 1);
+
+  const dist = cameraPosition.distance(positionWorld);
+  const fade = (a, b) => float(1).sub(smoothstep(a, b, dist));
+  const thr = float(1).sub(U.crystals.mul(0.42));
+
+  // 冰晶的取向分布。
+  //
+  // 注意别把片晶做成「完全躺平的镜子」：那样只有太阳和视线都很陡时才会闪，
+  // 低角度太阳下整片雪地会一个闪点都没有。干雪之所以在任何角度都闪，
+  // 是因为晶面取向本来就很散。所以这里用一个**宽分布 + 轻微朝上的偏置**。
+  const facetBase = mix(N, vec3(0, 1, 0), 0.28).normalize();
+
+  const crystalAt = (freq, seed, power, spread) => {
+    const sp = p2.mul(freq);
+    const cid = sp.floor().add(8192.0);
+    const cx = cid.x.toUint();
+    const cy = cid.y.toUint();
+    const h = (a, b, o) => hash(cx.mul(uint(a)).add(cy.mul(uint(b))).add(uint(seed + o)));
+    const r1 = h(1973, 9277, 0);
+    const r2 = h(7919, 2699, 17);
+    const r3 = h(6151, 3079, 91);
+    const r4 = h(4001, 5011, 53);
+    const r5 = h(3299, 8161, 131);
+    const r6 = h(5387, 6733, 197);
+
+    const j = vec3(r3.sub(0.5), r5.sub(0.5), r6.sub(0.5));
+    const nj = facetBase.add(j.mul(spread)).normalize();
+
+    // 冰晶是格子里的一个「点」，不是整格 —— 否则近看会变成一片小方块
+    const pt = float(1).sub(smoothstep(0.12, 0.40, sp.fract().sub(vec2(r1, r2)).length()));
+    return nj.dot(Hv).clamp(0, 1).pow(power)
+      .mul(smoothstep(thr, thr.add(0.13), r4))
+      .mul(pt);
+  };
+
+  // 三个尺度按距离淡出：近处细密、远处粗疏，避免远景闪成一片噪点
+  const g = crystalAt(52.0, 0, 60.0, 1.15).mul(0.8).mul(fade(16.0, 38.0))
+    .add(crystalAt(165.0, 331, 110.0, 1.40).mul(fade(5.0, 15.0)))
+    .add(crystalAt(460.0, 777, 190.0, 1.70).mul(0.9).mul(fade(1.6, 5.5)));
+
+  // 冰有色散，三个通道用略不同的指数 → 闪点边缘泛一点彩虹
+  const disp = vec3(g.pow(0.90), g, g.pow(1.14));
+  const glint = disp.mul(U.sparkle).mul(U.sunPower).mul(2.6).mul(cover).mul(sunVis).mul(hoar);
+
+  let e = U.sunColor.mul(glint);
+
+  // 逆反射：顺着阳光看过去时雪特别亮（颗粒间多次散射的结果）
+  const retro = V.dot(Lv).clamp(0, 1).pow(2.5).mul(0.048)
+    .mul(U.sunPower).mul(cover).mul(sunVis);
+  e = e.add(U.sunColor.mul(retro));
+
+  // 掠射角的天光光泽：菲涅耳权重的一层柔光，雪由此有丝绒质感而不是哑光纸。
+  // 指数 4.5 意味着它在掠射角上对法线极其敏感，而远景恰恰全是掠射角 ——
+  // 所以和高光一样按距离淡出，那本来也是只有近看才成立的质感。
+  const nv = N.dot(V).clamp(0, 1);
+  const crK = crust.clamp(0, 1).mul(float(1).sub(pk.clamp(0, 1)));
+  const sheen = float(1).sub(nv).pow(4.5).mul(0.30).mul(cover)
+    .mul(sky.clamp(0, 1)).mul(crK.mul(0.9).add(1.0))
+    .mul(float(1).sub(smoothstep(25.0, 110.0, dist)));
+  return e.add(U.skyHorizon.mul(sheen));
+};
+
+/**
+ * 次表面散射的透射量（乘在透射色上）。
+ *   thin   薄雪透得最多；crest 雪堤的薄棱也透
+ * 必须乘 cover：thin 在雪深为 0 时是 **1**，也就是「完全没有雪的地方
+ * 次表面散射最强」—— 把雪推光之后露出来的土会像自己在发光。
+ */
+export const sssAmountOf = (dep, crest, pk, sunVis, cover) => {
+  const thin = float(1).sub(smoothstep(0.02, 0.17, dep));
+  return thin.mul(0.55).add(crest.mul(0.35)).add(U.sssAmount)
+    .mul(sunVis.clamp(0, 1))
+    .mul(cover)
+    .mul(float(1).sub(pk.clamp(0, 1).mul(0.40)));
+};
+
+/** 各向同性的绕射项：不乘 NdotL，会绕到背光面去 —— 明暗交界变柔，雪不像石膏的关键 */
+export const sssWrapOf = (pk, cover) => U.sssWrap.div(float(1).add(pk.clamp(0, 1).mul(1.8))).mul(cover);
+
+/** 次表面散射的几个固定参数，地面和雪雕共用 */
+export function applySssConstants(mat) {
+  mat.thicknessDistortionNode = float(0.40);
+  mat.thicknessAttenuationNode = float(0.90);
+  mat.thicknessPowerNode = float(2.0);
+  mat.thicknessScaleNode = float(3.6);
+}
 
 function snowMaterial(L) {
   const { cell, isFine, height, packed, crust, lightB, at, bufOf, cl, worldOf } = L;
@@ -768,22 +950,8 @@ function snowMaterial(L) {
   mat.metalness = 0;
   mat.name = `snow_L${L.k}`;
 
-  // 有效光程：几何厚度 x 密度（越密单位厚度里散射次数越多）x 凹陷加成
-  const scatterPath = Fn(() => {
-    const dens = float(1)
-      .add(vPack.clamp(0, 1).mul(1.8))      // 压实的雪最密
-      .add(vCrust.clamp(0, 1).mul(0.6));    // 风壳次之
-    const d = vDep.div(0.20).clamp(0.06, 3.0);
-    const cav = vLight.z.max(0).mul(U.sssCavity).add(1.0);
-    return U.sssPath.mul(d).mul(dens).mul(cav);
-  })();
-
-  // Beer-Lambert：出射光谱
-  const iceTransmit = Fn(() => vec3(
-    scatterPath.mul(-ICE_ABSORB[0]).exp(),
-    scatterPath.mul(-ICE_ABSORB[1]).exp(),
-    scatterPath.mul(-ICE_ABSORB[2]).exp(),
-  ))();
+  // 有效光程 -> Beer-Lambert 出射光谱（共用函数，见上面「雪面着色」）
+  const iceTransmit = iceTransmitOf(scatterPathOf(vDep, vPack, vCrust, vLight.z));
 
   // ---- 顶点位移：直接输出世界坐标（模型矩阵是单位阵）----
   // 粗层往下压一点点：接缝的重叠带上永远是细层赢，不会 z-fighting。
@@ -804,44 +972,9 @@ function snowMaterial(L) {
   // ---- 法线：宏观形状 + 风纹 + 雪粒 ----
   mat.normalNode = Fn(() => {
     const n = vNrm.normalize();
-    const p = positionWorld.xz;
-    // 风纹最细的那一层是 19 周期/米（波长 5cm）。26m 的场地里它是「雪的质感」，
-    // 铺到 400m 之后一个像素里要过好几个周期 —— 直接烂成条纹摩尔纹。
-    //
-    // 淡出的判据不该是距离，而是**一个像素在雪面上覆盖多少米**。
-    // 同样 40m 远，俯视和掠视的像素足迹能差十倍：先前用距离拍的阈值，
-    // 站高了往下看时近处的雪就早早糊平了，画面下半截一片死白。
-    // fwidth 直接把这个足迹给出来，分辨率、视场角、掠射角一并算进去了。
-    //
-    // 阈值故意放在「一个像素约 3–14cm」而不是严格的奈奎斯特（2.5cm）。
-    // 严格按奈奎斯特淡出的话，贴地平视时 10m 外的风纹就没了 —— 而那正是
-    // 这个场景最好看的一档质感。留一点点混叠交给 TRAA，视觉上划算得多；
-    // 何况亚像素的法线方差已经在 roughnessNode 里按距离折算成粗糙度了。
-    const foot = fwidth(positionWorld.xz).length();
-    const near = float(1).sub(smoothstep(0.030, 0.140, foot));
-
-    // 转到风向坐标系：风纹垂直于风向、顺风被拉长
-    const wv = U.wind.xz.add(vec2(1e-4, 0));
-    const wl = wv.length().max(1e-4);
-    const cwd = wv.x.div(wl);
-    const swd = wv.y.div(wl);
-    const q = vec2(p.x.mul(cwd).add(p.y.mul(swd)), p.x.mul(swd).negate().add(p.y.mul(cwd)));
-
-    const F1X = 5.0, F1Y = 19.0, F2X = 13.0, F2Y = 47.0;
-    const n1 = noised(vec2(q.x.mul(F1X), q.y.mul(F1Y)));
-    const n2 = noised(vec2(q.x.mul(F2X), q.y.mul(F2Y)).add(vec2(31.7, 11.3)));
-
-    // 风壳把细颗粒糊平，只留下大尺度的风棱
-    const fine = float(1).sub(vCrust.clamp(0, 1).mul(0.55));
-    const gqx = n1.y.mul(F1X).add(n2.y.mul(F2X * 0.40).mul(fine));
-    const gqy = n1.z.mul(F1Y).add(n2.z.mul(F2Y * 0.40).mul(fine));
-    const gx = gqx.mul(cwd).sub(gqy.mul(swd));
-    const gz = gqx.mul(swd).add(gqy.mul(cwd));
-
-    // 风纹强弱跟着雪的厚度走，压实过的地方变平
-    const relief = vDep.div(U.targetDepth.max(0.02)).clamp(0, 1.4).mul(0.7).add(0.42);
-    const grain = float(0.0062).mul(relief).mul(float(1).sub(vPack.clamp(0, 1).mul(0.72)));
-    let g = vec3(gx.negate(), 0, gz.negate()).mul(grain).mul(near).mul(U.microRelief);
+    // 风纹 + 雪粒（共用函数，里面有淡出判据的来龙去脉）
+    const wg = windGrainGrad(positionWorld.xz, vCrust, vDep, vPack);
+    let g = vec3(wg.x.negate(), 0, wg.y.negate());
 
     if (crumbleK) {
       // 陡边破碎的法线贡献，必须和顶点位移用同一套噪声
@@ -861,13 +994,7 @@ function snowMaterial(L) {
 
   // ---- 反照率：新雪 / 风壳 / 压实雪 三态，外加断面层理 ----
   mat.colorNode = Fn(() => {
-    const pk = vPack.clamp(0, 1);
-    const cr = vCrust.clamp(0, 1).mul(float(1).sub(pk));   // 手压过的地方风壳早碎了
     const cover = smoothstep(0.002, 0.032, vDep);
-
-    const fresh = vec3(0.900, 0.932, 0.980);    // 新粉雪：最白
-    const crustC = vec3(0.878, 0.914, 0.968);   // 风壳：略灰、略致密
-    const packC = vec3(0.700, 0.775, 0.900);    // 压实雪：暗且偏蓝
 
     // 露出来的地面：真实的 PBR 地表，不再是一个常数深色。
     // 再叠一层很低频的明暗把平铺感打散 —— 1.75m 一次平铺，
@@ -875,20 +1002,8 @@ function snowMaterial(L) {
     const gTile = float(1).add(noised(positionWorld.xz.mul(0.07)).x.sub(0.5).mul(0.55));
     const ground = groundAlbedo(positionWorld.xz).mul(gTile);
 
-    // 极细的颗粒：雪不是一张均匀的白纸，近看有糖粒一样的明暗。
-    // 210 周期/米（波长 5mm），同样按像素足迹关掉，否则会烂成噪点。
-    const gritK = float(1).sub(smoothstep(0.004, 0.016, fwidth(positionWorld.xz).length()));
-    const grit = noised(positionWorld.xz.mul(210.0)).x.sub(0.5).mul(0.055)
-      .add(noised(positionWorld.xz.mul(41.0)).x.sub(0.5).mul(0.035))
-      .mul(gritK);
-
-    let c = mix(mix(fresh, crustC, cr), packC, pk.mul(0.80)).add(grit);
-
-    // 漫反射本身就是多次散射的结果，所以反照率也该带上吸收造成的偏蓝。
-    // 归一化到蓝通道，让它只改色相、不整体压暗。
-    const tr = iceTransmit;
-    const hue = tr.div(tr.z.max(1e-3)).clamp(0, 1);
-    c = c.mul(mix(vec3(1, 1, 1), hue, U.sssTint));
+    // 新雪 / 风壳 / 压实雪 + 颗粒 + 冰吸收的偏蓝（共用函数）
+    let c = snowAlbedo(vPack, vCrust, snowGrit(positionWorld.xz), iceTransmit);
 
     // 断面层理：只在陡坡（被挖开的切面）显现，按世界高度分层
     const yb = positionWorld.y.mul(38.0).add(noised(positionWorld.xz.mul(2.2)).x.mul(1.7));
@@ -936,12 +1051,7 @@ function snowMaterial(L) {
   mat.receivedShadowNode = (shadow) => shadow.mul(vLight.x.clamp(0, 1));
 
   mat.roughnessNode = Fn(() => {
-    const pk = vPack.clamp(0, 1);
-    const cr = vCrust.clamp(0, 1).mul(float(1).sub(pk));
-    const n = noised(positionWorld.xz.mul(3.5)).x.sub(0.5).mul(0.10);
-    // 新雪是无数松散冰晶面 → 中等粗糙；风壳被风磨过、压实雪被压过 → 更光滑
-    const snowR = mix(mix(float(0.68), float(0.38), cr), float(0.30), pk.mul(0.9))
-      .add(n).clamp(0.13, 0.92);
+    const snowR = snowRoughness(vPack, vCrust, positionWorld.xz);
     // 没盖住雪的地方用地面自己的粗糙度（这套土大约 0.87，比雪粗得多）
     const cover = smoothstep(0.002, 0.032, vDep);
     const base = mix(groundRough(positionWorld.xz), snowR, cover);
@@ -960,109 +1070,20 @@ function snowMaterial(L) {
   // 配上冰的吸收系数得到出射颜色 —— 蓝色是算出来的，不是调出来的。
 
   mat.thicknessColorNode = Fn(() => {
-    const thin = float(1).sub(smoothstep(0.02, 0.17, vDep));           // 薄雪透得最多
     const crest = vCav.negate().max(0).div(float(cell)).clamp(0, 1);   // 雪堤的薄棱也透
-    // 必须乘 cover：thin 在雪深为 0 时是 **1**，也就是「完全没有雪的地方
-    // 次表面散射最强」—— 把雪推光之后露出来的土会像自己在发光。
-    const amount = thin.mul(0.55).add(crest.mul(0.35)).add(U.sssAmount)
-      .mul(vLight.x.clamp(0, 1))
-      .mul(smoothstep(0.002, 0.032, vDep))
-      .mul(float(1).sub(vPack.clamp(0, 1).mul(0.40)));
-    return iceTransmit.mul(amount);
+    const cover = smoothstep(0.002, 0.032, vDep);
+    return iceTransmit.mul(sssAmountOf(vDep, crest, vPack, vLight.x, cover));
   })();
 
   // 各向同性的绕射项同理：没有雪就不该有绕射
-  const sssCover = smoothstep(0.002, 0.032, vDep);
+  mat.thicknessAmbientNode = sssWrapOf(vPack, smoothstep(0.002, 0.032, vDep));
 
-  // 各向同性的绕射项。它不乘 NdotL，所以会绕到背光面去 ——
-  // 这就是次表面散射让明暗交界变柔的原因，也是雪不像石膏的关键。
-  mat.thicknessAmbientNode = Fn(() =>
-    U.sssWrap.div(float(1).add(vPack.clamp(0, 1).mul(1.8))).mul(sssCover))();
-
-  mat.thicknessDistortionNode = float(0.40);
-  mat.thicknessAttenuationNode = float(0.90);
-  mat.thicknessPowerNode = float(2.0);
-  mat.thicknessScaleNode = float(3.6);
+  applySssConstants(mat);
 
   // ---- 冰晶闪烁 + 逆反射 + 光标环 ----
   mat.emissiveNode = Fn(() => {
-    const N = vNrm.normalize();
-    const V = cameraPosition.sub(positionWorld).normalize();
-    const Lv = U.sunDir;
-    const Hv = Lv.add(V).normalize();
     const cover = smoothstep(0.002, 0.032, vDep);
-    // 注意：这里只有高度场自遮挡，拿不到 shadow map。冰晶走 emissive 通道，
-    // 而 emissive 在光照之前就求值了，所以石头/树投下的影子里雪面照样会闪。
-    // 试过用 toVar 把 receivedShadowNode 的结果截获出来，求值顺序不配合，没成。
-    const sunVis = vLight.x.clamp(0, 1);
-
-    // 表层松散冰晶的密度。新雪最多；被压实或被风烧结成壳之后就没有了 ——
-    // 所以推过的地方不闪，刚落的雪最闪。
-    const hoar = float(1)
-      .sub(vPack.clamp(0, 1).mul(0.92))
-      .sub(vCrust.clamp(0, 1).mul(0.50))
-      .clamp(0, 1);
-
-    const dist = cameraPosition.distance(positionWorld);
-    const fade = (a, b) => float(1).sub(smoothstep(a, b, dist));
-
-    const thr = float(1).sub(U.crystals.mul(0.42));
-
-    // 冰晶的取向分布。
-    //
-    // 注意别把片晶做成「完全躺平的镜子」：那样只有太阳和视线都很陡时才会闪，
-    // 低角度太阳下整片雪地会一个闪点都没有。干雪之所以在任何角度都闪，
-    // 是因为晶面取向本来就很散。所以这里用一个**宽分布 + 轻微朝上的偏置**。
-    const facetBase = mix(N, vec3(0, 1, 0), 0.28).normalize();
-
-    const crystalAt = (freq, seed, power, spread) => {
-      const sp = positionWorld.xz.mul(freq);
-      const cid = sp.floor().add(8192.0);
-      const cx = cid.x.toUint();
-      const cy = cid.y.toUint();
-      const h = (a, b, o) => hash(cx.mul(uint(a)).add(cy.mul(uint(b))).add(uint(seed + o)));
-      const r1 = h(1973, 9277, 0);
-      const r2 = h(7919, 2699, 17);
-      const r3 = h(6151, 3079, 91);
-      const r4 = h(4001, 5011, 53);
-      const r5 = h(3299, 8161, 131);
-      const r6 = h(5387, 6733, 197);
-
-      const j = vec3(r3.sub(0.5), r5.sub(0.5), r6.sub(0.5));
-      const nj = facetBase.add(j.mul(spread)).normalize();
-
-      // 冰晶是格子里的一个「点」，不是整格 —— 否则近看会变成一片小方块
-      const pt = float(1).sub(smoothstep(0.12, 0.40, sp.fract().sub(vec2(r1, r2)).length()));
-      return nj.dot(Hv).clamp(0, 1).pow(power)
-        .mul(smoothstep(thr, thr.add(0.13), r4))
-        .mul(pt);
-    };
-
-    // 三个尺度按距离淡出：近处细密、远处粗疏，避免远景闪成一片噪点
-    const g = crystalAt(52.0, 0, 60.0, 1.15).mul(0.8).mul(fade(16.0, 38.0))
-      .add(crystalAt(165.0, 331, 110.0, 1.40).mul(fade(5.0, 15.0)))
-      .add(crystalAt(460.0, 777, 190.0, 1.70).mul(0.9).mul(fade(1.6, 5.5)));
-
-    // 冰有色散，三个通道用略不同的指数 → 闪点边缘泛一点彩虹
-    const disp = vec3(g.pow(0.90), g, g.pow(1.14));
-    const glint = disp.mul(U.sparkle).mul(U.sunPower).mul(2.6).mul(cover).mul(sunVis).mul(hoar);
-
-    let e = U.sunColor.mul(glint);
-
-    // 逆反射：顺着阳光看过去时雪特别亮（颗粒间多次散射的结果）
-    const retro = V.dot(Lv).clamp(0, 1).pow(2.5).mul(0.048)
-      .mul(U.sunPower).mul(cover).mul(sunVis);
-    e = e.add(U.sunColor.mul(retro));
-
-    // 掠射角的天光光泽：菲涅耳权重的一层柔光，雪由此有丝绒质感而不是哑光纸。
-    // 指数 4.5 意味着它在掠射角上对法线极其敏感，而远景恰恰全是掠射角 ——
-    // 所以和高光一样按距离淡出，那本来也是只有近看才成立的质感。
-    const nv = N.dot(V).clamp(0, 1);
-    const crK = vCrust.clamp(0, 1).mul(float(1).sub(vPack.clamp(0, 1)));
-    const sheen = float(1).sub(nv).pow(4.5).mul(0.30).mul(cover)
-      .mul(vLight.y.clamp(0, 1)).mul(crK.mul(0.9).add(1.0))
-      .mul(float(1).sub(smoothstep(25.0, 110.0, dist)));
-    e = e.add(U.skyHorizon.mul(sheen));
+    const e = snowSparkle(vNrm.normalize(), positionWorld.xz, vPack, vCrust, vLight.x, vLight.y, cover);
 
     const dbg = U.debugMode.clamp(0, 1);
     if (!isFine) return mix(e, debugColor, dbg);
@@ -1074,16 +1095,13 @@ function snowMaterial(L) {
       .mul(float(1).sub(smoothstep(R.mul(0.985), R.mul(1.075), dh)))
       .mul(float(1).sub(U.moldActive));
 
-    // 模具预览：把即将扣下去的那个形状的**轮廓**直接画在雪面上。
-    // 画的是 molds.js 给的那条有向距离，所以描的是形状本身的边
-    // （城墙的长方形、星形的五个角），不是一个笼统的圆。
-    // 整段包在 uniform 条件里 —— 用手的时候这些指令一条也不执行。
+    // 模具预览：雕塑本身的虚影由 sculpt.js 画，这里在雪面上描出底座的轮廓，
+    // 看得出它会压在哪儿。整段包在 uniform 条件里 —— 用手的时候一条也不执行。
     const preview = vec3(0).toVar();
     If(U.moldActive.greaterThan(0.5), () => {
-      const sd = moldShape(moldLocal(positionWorld.xz)).y;
-      const fill = float(1).sub(smoothstep(-0.05, 0.0, sd));
-      const line = float(1).sub(smoothstep(0.0, 0.06, sd.abs()));
-      preview.assign(vec3(0.40, 0.72, 1.0).mul(fill.mul(0.085).add(line.mul(0.50))));
+      const sd = padSd(moldLocal(positionWorld.xz));
+      const line = float(1).sub(smoothstep(0.0, 0.05, sd.abs()));
+      preview.assign(vec3(0.40, 0.72, 1.0).mul(line.mul(0.40)));
     });
 
     return mix(e.add(vec3(0.42, 0.68, 1.0).mul(ring).mul(0.45).mul(U.handActive)).add(preview),
@@ -1358,4 +1376,22 @@ export function sampleHeightXZ(xz) {
   return select(L0.insideWindow(xz.x, xz.y),
     L0.surfAt(xz.x, xz.y),
     levels[1].surfAt(xz.x, xz.y));
+}
+
+// ---------------------------------------------------------------- 雪面读回（给 CPU 用）
+//
+// CPU 那边原先只知道一个「平均雪深」估计。但雪面到处不一样：风吹的起伏、
+// 手推出来的沟和堆、刚铺满的雪比估计值厚…… 模具按估计值放，
+// 就会一会儿埋进雪里、一会儿悬在雪上。
+//
+// 所以把 L0 的绝对表面高度（448² 个 float，约 800KB）异步读回来。
+// 它是环形寻址的：世界格子 (cx, cz) 在缓冲区里的下标是 mod(cz)·G + mod(cx)，
+// 和 GPU 那边的 bufOf 一致。读回有几帧延迟，对「这里雪有多高」足够了。
+
+/** 发起一次读回。resolve 时给出数据和发起时的窗口起点。 */
+export async function readSurface(renderer) {
+  const ox = L0.oc.value.x;
+  const oz = L0.oc.value.y;
+  const buf = await renderer.getArrayBufferAsync(L0.surf.value);
+  return { data: new Float32Array(buf), ox, oz, cell: L0.cell, n: GRID };
 }

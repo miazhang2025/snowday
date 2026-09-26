@@ -259,7 +259,9 @@ async function init() {
   // --- 初始化 GPU 数据 ---
   renderer.compute(computeFlakeInit);
   renderer.compute(computeSprayInit);
-  fillSnow(0);                       // 从裸地开始，让雪自己积起来
+  // 一开场就是满地的雪。以前是从裸地开始让雪自己积起来 —— 落地页一揭开是一片黑土，
+  // 雪要好几秒才慢慢盖上，看着像没加载完
+  fillSnow(params.depth);
 
   // 调试/性能测量入口（也方便你在控制台里直接改参数）
   window.__snow = {
@@ -394,33 +396,6 @@ function placeLandingCamera() {
   camera.position.set(CAM_LAND_TARGET.x - vx * dist, CAM_LAND.y, CAM_LAND_TARGET.z - vz * dist);
   keepAboveGround();
   controls.update();
-}
-
-/**
- * 落地页的镜头一直在慢慢自转（约 2°/s），照原样转下去四五十秒就又正对太阳了。
- * 所以视线和太阳的夹角一旦小于 AVOID_DEG 且还在靠近，就调头往回转 ——
- * 速度是平滑过渡过去的（约 2 秒减速、反向、加速），不是一下子掉头。
- */
-const AVOID_DEG = 110;
-const LAND_SPIN = 0.35;
-let spinSign = 0;               // 0 = 还没初始化，取当前自转方向
-let lastSunAngle = 0;
-
-function avoidSun(dt) {
-  if (!controls.autoRotate) return;
-  if (!spinSign) spinSign = Math.sign(controls.autoRotateSpeed) || -1;
-  const vx = controls.target.x - camera.position.x;
-  const vz = controls.target.z - camera.position.z;
-  const sx = U.sunDir.value.x, sz = U.sunDir.value.z;
-  const l = Math.hypot(vx, vz) * Math.hypot(sx, sz);
-  if (l < 1e-6) return;
-  const ang = Math.acos(Math.max(-1, Math.min(1, (vx * sx + vz * sz) / l))) * 180 / Math.PI;
-  if (ang < AVOID_DEG && ang < lastSunAngle && Math.sign(controls.autoRotateSpeed) === spinSign) {
-    spinSign = -spinSign;
-  }
-  lastSunAngle = ang;
-  const want = spinSign * Math.abs(LAND_SPIN);
-  controls.autoRotateSpeed += (want - controls.autoRotateSpeed) * Math.min(1, dt * 1.2);
 }
 
 /** 落地页期间镜头在自转，绕到山坡那一侧时别钻进地里 */
@@ -610,10 +585,7 @@ function animate() {
   walk(dt);
   stepFly(dt);
   controls.update();
-  if (document.body.classList.contains('landing')) {
-    keepAboveGround();
-    avoidSun(dt);
-  }
+  if (document.body.classList.contains('landing')) keepAboveGround();
 
   // --- clipmap 跟随观察点 ---
   // 用 controls.target 而不是相机位置：玩家真正在看的是那儿，
@@ -720,6 +692,56 @@ function askAnyway(msg) {
 }
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const frames = (n) => new Promise((r) => {
+  let k = 0;
+  const f = () => (++k >= n ? r() : requestAnimationFrame(f));
+  requestAnimationFrame(f);
+});
+
+/**
+ * 揭开落地页之前，把会「一样一样冒出来」的东西都等齐：
+ *   模型（树、石头…）和 HDRI       —— 异步加载，来一个冒一个
+ *   着色器 / 渲染管线              —— 第一次画到某种材质时才编译，会卡一下
+ *   落地页用到的图片和字体
+ *   再空跑几十帧                  —— HDRI 到了之后要重烘环境光，TRAA 也要攒满历史
+ * 启动页的进度条跟着走。
+ */
+async function prepare() {
+  const t0 = performance.now();
+  const bar = document.querySelector('#boot .bar i');
+  const set = (f) => { bar.style.width = `${Math.round(6 + f * 94)}%`; };
+  bar.classList.add('det');
+  set(0);
+
+  // 资源：占前 45%
+  let got = 0;
+  for (const pr of loading) pr.finally(() => set((++got / loading.length) * 0.45));
+  await Promise.allSettled(loading);
+  const imgs = [...document.querySelectorAll('#landing img')];
+  await Promise.all([...imgs.map((im) => im.decode().catch(() => {})), document.fonts?.ready]);
+  set(0.5);
+  const tLoad = performance.now();
+
+  // 预热：占后 50%，每跑一帧往前走一点。
+  // 第一次画到的材质在这里编译 —— 这台机器上首次打开要卡好几秒（Windows 上 WGSL 还要再转 D3D 编一遍），
+  // 浏览器会缓存编译结果，第二次打开快得多。renderer.compileAsync 会把所有物体的所有材质变体
+  // 挨个编一遍，实测更慢，所以不用它。HDRI 到了之后的重烘、TRAA 的历史也在这里攒满。
+  const N = 40;
+  for (let i = 1; i <= N; i++) {
+    await frames(1);
+    set(0.5 + (i / N) * 0.5);
+  }
+  console.info(`[snow] 落地页就绪：资源 ${((tLoad - t0) / 1000).toFixed(1)}s，`
+    + `预热 ${((performance.now() - tLoad) / 1000).toFixed(1)}s`);
+}
+
+/** 启动页淡出，同时场景和落地页由模糊变清晰（CSS 见 body.booting） */
+function reveal() {
+  requestAnimationFrame(() => {
+    document.body.classList.remove('booting');
+    document.getElementById('boot').classList.add('done');
+  });
+}
 
 /**
  * 落地页上实测帧率（落地页背后就是真场景在跑）。
@@ -767,6 +789,7 @@ async function start() {
 
   await init();
   placeLandingCamera();
+  await prepare();
 
   // 新手指引：第一次进来，等镜头推进画面之后再浮出来
   tour = createTour({ interaction, ui, camera });
@@ -780,9 +803,7 @@ async function start() {
       if (!tourDone()) setTimeout(() => tour.start(), ENTER_T * 1000 + 300);
     },
   });
-  requestAnimationFrame(() => {
-    setTimeout(() => document.getElementById('boot').classList.add('done'), 260);
-  });
+  reveal();
 
   // ---- 门禁第二关：实测 ----
   if (!isOverridden()) runProbe(landing);

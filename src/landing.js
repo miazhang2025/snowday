@@ -110,7 +110,6 @@ function initTitleFx() {
     if (!reduce) burst(e.clientX, e.clientY);
   };
   title.addEventListener('animationend', (e) => {
-    if (e.animationName === 'titleIn') title.classList.add('ready');
     if (e.animationName === 'boing') title.classList.remove('boing');
   });
 

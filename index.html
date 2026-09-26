@@ -404,6 +404,94 @@
   .ph-actions .imgbtn{width:clamp(170px,14vw,240px);margin:0 -18px}
   .ph-actions button[hidden]{display:none}
 
+
+  /* ---------------------------------------------------------- 新手指引（tour.js）
+     没有卡片：一行浮在场景里的字 + 一个动画（雪面上的圆圈 / 箭头）。
+     位置由 tour.js 逐帧写 transform；这里只管样子和淡入淡出。 */
+  #tour{position:fixed;inset:0;z-index:40;pointer-events:none;
+    opacity:0;visibility:hidden;transition:opacity .6s ease,visibility .6s}
+  #tour.open{opacity:1;visibility:visible}
+  body.viewing #tour,body.landing #tour{opacity:0;visibility:hidden}
+  #tour .tg-ring,#tour .tg-arrow,#tour .tg-text{position:absolute;left:0;top:0;transition:opacity .45s ease}
+  #tour.leave .tg-ring,#tour.leave .tg-arrow,#tour.leave .tg-text{opacity:0!important}
+  /* 每一步只露出它用的那个动画 */
+  #tour:not([data-step="push"]):not([data-step="place"]) .tg-ring{display:none}
+  #tour:not([data-step="menu"]):not([data-step="photo"]) .tg-arrow{display:none}
+
+  /* 雪面上的圆圈：和真正按下去时那圈光标一个样子 */
+  .tg-ring{
+    border:2px solid rgba(255,255,255,.92);border-radius:50%;
+    box-shadow:0 0 14px rgba(255,255,255,.55),inset 0 0 18px rgba(170,200,255,.35);
+    background:radial-gradient(closest-side,rgba(255,255,255,.18),rgba(255,255,255,0));
+  }
+  /* 第 3 步：原地呼吸，「点这里」 */
+  #tour[data-step="place"] .tg-ring::after{
+    content:'';position:absolute;inset:-2px;border-radius:50%;border:2px solid rgba(255,255,255,.8);
+    animation:tgPulse 1.6s ease-out infinite;
+  }
+  @keyframes tgPulse{from{transform:scale(.4);opacity:.9}to{transform:scale(1.35);opacity:0}}
+
+  /* 箭头：朝右（在目标左边）或朝上（在目标下面），轻轻来回晃 */
+  .tg-arrow{width:64px;height:28px}
+  .tg-arrow svg{display:block;width:100%;height:100%;overflow:visible;
+    filter:drop-shadow(0 1px 6px rgba(70,58,100,.45)) drop-shadow(0 0 8px rgba(255,255,255,.6))}
+  .tg-arrow[data-side="left"] svg{animation:tgNudgeX 1.2s ease-in-out infinite}
+  .tg-arrow[data-side="below"]{width:28px;height:64px}
+  .tg-arrow[data-side="below"] svg{position:absolute;left:-18px;top:18px;width:64px;height:28px;
+    transform:rotate(-90deg);animation:tgNudgeY 1.2s ease-in-out infinite}
+  @keyframes tgNudgeX{0%,100%{translate:0 0}50%{translate:-10px 0}}
+  @keyframes tgNudgeY{0%,100%{translate:0 0}50%{translate:0 10px}}
+
+  /* 字：一行大的（和面板标题同一套衬线字），一行小的提示 */
+  .tg-text{white-space:nowrap;text-shadow:0 1px 10px rgba(70,58,100,.45),0 0 2px rgba(70,58,100,.25)}
+  .tg-text[data-align="center"]{text-align:center}
+  .tg-text[data-align="right"]{text-align:right}
+  .tg-text .a{font-family:var(--serif);font-weight:500;font-size:34px;line-height:1}
+  .tg-text .b{margin-top:8px;font-size:11px;letter-spacing:.18em;text-transform:uppercase;opacity:.92}
+  .tg-text kbd{
+    display:inline-block;min-width:17px;text-align:center;padding:0 4px;margin:0 1px;
+    border:1px solid var(--line);border-radius:3px;font-family:var(--mono);font-size:10px;line-height:1.5;
+  }
+  .tg-skip{
+    position:absolute;left:50%;bottom:clamp(14px,3.5vh,34px);transform:translateX(-50%);pointer-events:auto;
+    border:0;background:none;padding:4px 8px;font-family:var(--mono);font-size:10.5px;
+    letter-spacing:.18em;text-transform:uppercase;color:var(--snow);text-shadow:var(--glow);opacity:.6;
+    transition:opacity .25s;
+  }
+  .tg-skip:hover{opacity:1;background:none}
+  /* 指到的控件：一圈缓慢呼吸的光 */
+  .tour-focus{position:relative;animation:tourPulse 1.8s ease-in-out infinite;border-radius:10px}
+  #tools .tour-focus{border-radius:50%}
+  @keyframes tourPulse{
+    0%,100%{box-shadow:0 0 0 0 rgba(232,144,126,0),0 0 0 0 rgba(255,255,255,0)}
+    50%{box-shadow:0 0 0 3px rgba(232,144,126,.55),0 0 18px 4px rgba(255,255,255,.55)}
+  }
+  /* 说明面板底下：重看指引 */
+  #help .tourbtn{
+    margin-top:14px;border:0;background:none;padding:0;font-family:var(--mono);font-size:11px;
+    letter-spacing:.16em;text-transform:uppercase;color:var(--snow);text-shadow:var(--glow);opacity:.8;
+    transition:opacity .25s;
+  }
+  #help .tourbtn:hover{opacity:1;background:none}
+
+  /* ---------------------------------------------------------- 设备门禁（gate.js） */
+  /* 落地页：实测帧率不够时，ENTER 换成一段说明 */
+  .ld-gate{
+    display:none;max-width:420px;margin-top:6px;padding:0 24px;text-align:center;
+    font-size:12px;line-height:1.9;letter-spacing:.04em;text-shadow:var(--glow);
+  }
+  .ld-gate b{font-weight:500}
+  #landing.blocked .ld-enter{display:none}
+  #landing.blocked .ld-gate{display:block;animation:fadeUp .8s ease both}
+  .gate-any{
+    margin-top:12px;border:0;background:none;padding:0;font-family:var(--mono);font-size:11px;
+    letter-spacing:.16em;text-transform:uppercase;color:var(--snow);text-shadow:var(--glow);opacity:.7;
+    text-decoration:underline;text-underline-offset:4px;transition:opacity .25s;
+  }
+  .gate-any:hover{opacity:1;background:none}
+  #boot .gate-any{display:none;color:var(--blue);text-shadow:none}
+  #boot.failed.soft .gate-any{display:inline-block}
+
   @media (prefers-reduced-motion:reduce){
     .ld-ring,.ld-spark,.ld-title{animation:none!important}
   }
@@ -440,6 +528,18 @@
 <div id="help" class="hidden">
   <div class="t" data-i18n="hint.show">Controls</div>
   <div id="hint" data-i18n="hint.html"></div>
+  <button class="tourbtn" id="tourbtn" data-i18n="tour.replay">Replay the tour</button>
+</div>
+
+<!-- 新手指引（tour.js 逐帧摆位置） -->
+<div id="tour" aria-live="polite">
+  <div class="tg-ring" id="tgring"></div>
+  <div class="tg-arrow" id="tgarrow">
+    <svg viewBox="0 0 64 28" aria-hidden="true"><path d="M3 14h52M42 4l13 10-13 10"
+      fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </div>
+  <div class="tg-text" id="tgtext"><div class="a"></div><div class="b"></div></div>
+  <button class="tg-skip" id="tgskip"></button>
 </div>
 
 <div id="ui">
@@ -465,6 +565,11 @@
       <img class="n" src="assets/UI/enter.png" alt="" width="771" height="307" />
       <img class="h" src="assets/UI/enter-hover.png" alt="" width="771" height="307" />
     </button>
+    <!-- 实测帧率不够时替换 ENTER（gate.js / main.js） -->
+    <div class="ld-gate" id="ldgate">
+      <div id="ldgatemsg"></div>
+      <button class="gate-any" id="ldgateany" data-i18n="gate.anyway">Enter anyway</button>
+    </div>
   </div>
   <p class="ld-foot" data-i18n="land.foot"></p>
   <img class="ld-spark" src="assets/snow.png" alt="" width="123" height="119" />
@@ -504,6 +609,7 @@
   <p class="tip" data-i18n="boot.tip"></p>
   <div class="bar"><i></i></div>
   <div class="err" id="booterr"></div>
+  <button class="gate-any" id="bootany" data-i18n="gate.try">Try anyway</button>
 </div>
 
 <script type="importmap">

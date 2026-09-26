@@ -38,6 +38,31 @@ const DICT = {
     'b.photo': '◉ Photo',
     'b.photoSaved': '✓ Saved',
 
+    'gate.mobile': '<b>Snow Day</b> is made for a computer.<br/>'
+      + 'It simulates the whole snowfield on the GPU in real time and needs a mouse to play '
+      + '(drag to push, right-drag to look around, scroll to zoom). '
+      + 'Open <b>snowday.crechetank.com</b> on a laptop or desktop with Chrome / Edge.',
+    'gate.weak': 'This device looks a little too light for Snow Day ({0}).<br/>'
+      + 'The snow is simulated live on the GPU, so it would probably stutter here. '
+      + 'A computer with a dedicated or recent integrated GPU and Chrome / Edge works best.',
+    'gate.slow': 'Your computer is running this scene at about <b>{0} fps</b>, even on low quality.<br/>'
+      + 'It would feel choppy to play. A machine with a stronger GPU will do much better — '
+      + 'or make sure the browser is using hardware acceleration and the laptop is plugged in.',
+    'gate.anyway': 'Enter anyway',
+    'gate.try': 'Try anyway',
+
+    'tour.replay': '↺ Replay the tour',
+    'tour.skip': 'Skip the tour',
+    'tour.push': 'Push the snow',
+    'tour.push.k': 'Hold the left button and drag',
+    'tour.menu': 'Switch to Mold',
+    'tour.menu.k': 'or press <kbd>4</kbd>',
+    'tour.menu.open': 'Open the panel',
+    'tour.menu.open.k': 'then pick Mold',
+    'tour.place': 'Place a snowman',
+    'tour.place.k': 'Click on the snow',
+    'tour.photo': 'Take a photo',
+    'tour.photo.k': 'or press <kbd>P</kbd>',
     'land.enter': 'Enter (↵)',
     'land.foot': 'A quiet place to play in the snow · live on WebGPU',
 
@@ -171,6 +196,30 @@ const DICT = {
     'b.photo': '◉ 拍照',
     'b.photoSaved': '✓ 已保存',
 
+    'gate.mobile': '<b>Snow Day</b> 是给电脑做的。<br/>'
+      + '整片雪地都在显卡上实时模拟，玩的时候也要用鼠标（左键推雪、右键转视角、滚轮缩放）。'
+      + '请在笔记本或台式机上用 Chrome / Edge 打开 <b>snowday.crechetank.com</b>。',
+    'gate.weak': '这台设备跑 Snow Day 可能有点吃力（{0}）。<br/>'
+      + '雪是在显卡上实时模拟的，在这里多半会卡。'
+      + '推荐用带独立显卡或较新核显的电脑，配 Chrome / Edge。',
+    'gate.slow': '这台电脑跑这个场景大约只有 <b>{0} fps</b>，已经是低画质了。<br/>'
+      + '玩起来会一卡一卡的。换一台显卡强一点的电脑会好很多 —— '
+      + '或者确认浏览器开着硬件加速、笔记本插着电源。',
+    'gate.anyway': '仍然进入',
+    'gate.try': '仍然尝试',
+
+    'tour.replay': '↺ 重看新手指引',
+    'tour.skip': '跳过指引',
+    'tour.push': '推雪',
+    'tour.push.k': '按住左键，拖动',
+    'tour.menu': '换成「模具」',
+    'tour.menu.k': '或者按 <kbd>4</kbd>',
+    'tour.menu.open': '打开面板',
+    'tour.menu.open.k': '然后选「模具」',
+    'tour.place': '放一个雪人',
+    'tour.place.k': '在雪上点一下',
+    'tour.photo': '拍张照',
+    'tour.photo.k': '或者按 <kbd>P</kbd>',
     'land.enter': '进入（回车）',
     'land.foot': '一个安静玩雪的地方 · WebGPU 实时渲染',
 

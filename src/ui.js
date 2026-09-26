@@ -426,5 +426,5 @@ export function initUI(actions) {
   syncAll();
   applyLang();
 
-  return { syncAll, setMode, setMold, applyLang };
+  return { syncAll, setMode, setMold, setQuality, applyLang };
 }

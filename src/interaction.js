@@ -55,6 +55,7 @@ export function createInteraction(renderer, scene, camera, controls, dom) {
     // 模具
     placeReq: false,    // 这一帧要不要扣一下
     hasPlaced: false,
+    placedCount: 0,     // 一共扣下过几个（新手指引要知道）
     lastPX: 0,
     lastPZ: 0,
   };
@@ -270,6 +271,7 @@ export function createInteraction(renderer, scene, camera, controls, dom) {
     S.lastPX = x;
     S.lastPZ = z;
     S.hasPlaced = true;
+    S.placedCount++;
   }
 
   // ------------------------------------------------------------ 每帧
@@ -425,5 +427,18 @@ export function createInteraction(renderer, scene, camera, controls, dom) {
     sculpts.prune(x, z);
   }
 
-  return { update, setSurface, setCenter, state: S, sculpts };
+  /**
+   * 屏幕像素坐标 -> 雪面上的点（新手指引要把圆圈画在雪面上）。
+   * 打不到地面返回 false。
+   */
+  const _pr = new THREE.Raycaster();
+  const _pn = new THREE.Vector2();
+  function pickGround(sx, sy, out) {
+    const r = dom.getBoundingClientRect();
+    _pn.set(((sx - r.left) / r.width) * 2 - 1, -((sy - r.top) / r.height) * 2 + 1);
+    _pr.setFromCamera(_pn, camera);
+    return raycastGround(_pr.ray.origin, _pr.ray.direction, out);
+  }
+
+  return { update, setSurface, setCenter, pickGround, state: S, sculpts };
 }

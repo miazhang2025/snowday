@@ -16,8 +16,9 @@ export function initLanding(controls, { onEnter } = {}) {
   controls.autoRotateSpeed = -0.35;     // 很慢，一圈差不多三分钟
 
   let entered = false;
+  let blocked = false;
   const enter = () => {
-    if (entered) return;
+    if (entered || blocked) return;
     entered = true;
     controls.autoRotate = false;
     root.classList.add('leaving', 'gone');
@@ -38,7 +39,24 @@ export function initLanding(controls, { onEnter } = {}) {
   addEventListener('keydown', onKey);
   btn.focus({ preventScroll: true });
 
-  return { enter };
+  /**
+   * 实测帧率不够：把 ENTER 换成一段说明 + 「仍然进入」。
+   * onAnyway 在点了「仍然进入」之后调（main.js 记下这台机器的选择）。
+   */
+  function block(html, onAnyway) {
+    if (entered) return;
+    blocked = true;
+    document.getElementById('ldgatemsg').innerHTML = html;
+    root.classList.add('blocked');
+    document.getElementById('ldgateany').onclick = () => {
+      onAnyway?.();
+      blocked = false;
+      root.classList.remove('blocked');
+      enter();
+    };
+  }
+
+  return { enter, block, get entered() { return entered; } };
 }
 
 /**

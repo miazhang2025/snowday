@@ -31,11 +31,16 @@ import { initUI } from './ui.js';
 import { loadModel, unloadModel } from './models.js';
 import { t, applyStatic } from './i18n.js';
 import { initLanding } from './landing.js';
+import { checkDevice, measureFps, MIN_FPS, isOverridden, setOverride } from './gate.js';
+import { createTour, tourDone } from './tour.js';
 
 // 载入画面在 init 之前就要有文字，所以这里先刷一次静态文案
 applyStatic();
 
-let renderer, scene, camera, controls, lights, env, postfx, interaction;
+let renderer, scene, camera, controls, lights, env, postfx, interaction, ui, tour;
+// 场景里还在异步加载的东西（HDRI、各个 glb）。加载和建 LOD 时主线程会卡好几秒，
+// 落地页实测帧率必须等它们都落地，不然好电脑也会被量成个位数帧率
+const loading = [];
 const props = [];      // 每个 BatchedMesh 组的 { update, meshes, stats }
 let lastBake = -1e9;
 const timer = new THREE.Timer();
@@ -174,7 +179,7 @@ async function init() {
   interaction = createInteraction(renderer, scene, camera, controls, renderer.domElement);
 
   // --- UI ---
-  initUI({
+  ui = initUI({
     onChange: applySettings,
     onFill: (v) => fillSnow(v),
     onResetView: resetView,
@@ -188,7 +193,7 @@ async function init() {
 
   // HDRI 环境光：异步加载，来了之后重烘一次。
   // 天空穹顶、太阳、雾仍然由「时间 / 阴天」那套参数驱动 —— HDRI 只负责间接光。
-  env.load(HDRI_URL).then((info) => {
+  loading.push(env.load(HDRI_URL).then((info) => {
     setEnvInfo(info);
     refresh();
     applySettings();
@@ -197,12 +202,12 @@ async function init() {
     console.info(`[snow] HDRI ready: ${HDRI_URL} · 太阳方位 ${(info.sunAz * 180 / Math.PI).toFixed(1)}°`);
   }).catch((e) => {
     console.warn('[snow] HDRI 加载失败，回落到程序化天空环境光：', e.message || e);
-  });
+  }));
 
   // 外部模型：每个 glb 一个 BatchedMesh，实例数从几十涨到两千。
   // 都是异步的，任何一个失败都不影响主场景。
-  const place = (url, opts) =>
-    batchModel(scene, url, { groundAt: terrainY, ...opts })
+  const place = (url, opts) => {
+    const pr = batchModel(scene, url, { groundAt: terrainY, ...opts })
       .then((h) => {
         props.push(h);
         const t = h.stats.lodTris.flat();
@@ -211,6 +216,9 @@ async function init() {
         return h;
       })
       .catch((e) => console.warn(`[snow] ${url} 加载失败：`, e.message || e));
+    loading.push(pr);
+    return pr;
+  };
 
   // 分两层撒：近处一圈密的（玩雪区周围的「布景」，这是镜头最常看的地方），
   // 外面一大片稀的铺满到 380m。只用一层的话，要么近处空空荡荡、
@@ -357,6 +365,62 @@ function stepFly(dt) {
   camera.position.setFromSpherical(s).add(controls.target);
   keepAboveGround();                 // 停在山坡那一侧时，推近的路上别钻进地里
   if (fly.t >= 1) fly = null;
+}
+
+/**
+ * 落地页的机位按太阳摆：别正对着太阳。
+ *
+ * 原来的机位是写死的，偏偏正对太阳 —— 开场第一眼是一片刺眼的逆光、雪地发灰。
+ * 现在视线**背对太阳再偏开 50°**（太阳在身后侧方，和视线夹 130°）：
+ * 正对太阳刺眼，正背对太阳又太平，侧光拉出的长影子最好看。
+ * 往左偏还是往右偏，挑离原来那个构图更近的一边；距离和高度照旧。
+ */
+function placeLandingCamera() {
+  const sx = U.sunDir.value.x, sz = U.sunDir.value.z;
+  const sl = Math.hypot(sx, sz);
+  const base = _off.subVectors(CAM_LAND_TARGET, CAM_LAND);        // 原来的视线
+  const dist = Math.hypot(base.x, base.z);
+  let vx = base.x / dist, vz = base.z / dist;
+  if (sl > 1e-4) {
+    const away = Math.atan2(-sz / sl, -sx / sl);                   // 背对太阳的方向
+    const orig = Math.atan2(vz, vx);
+    const off = THREE.MathUtils.degToRad(50);
+    const pick = [away + off, away - off]
+      .sort((a, b) => Math.cos(b - orig) - Math.cos(a - orig))[0];
+    vx = Math.cos(pick);
+    vz = Math.sin(pick);
+  }
+  controls.target.copy(CAM_LAND_TARGET);
+  camera.position.set(CAM_LAND_TARGET.x - vx * dist, CAM_LAND.y, CAM_LAND_TARGET.z - vz * dist);
+  keepAboveGround();
+  controls.update();
+}
+
+/**
+ * 落地页的镜头一直在慢慢自转（约 2°/s），照原样转下去四五十秒就又正对太阳了。
+ * 所以视线和太阳的夹角一旦小于 AVOID_DEG 且还在靠近，就调头往回转 ——
+ * 速度是平滑过渡过去的（约 2 秒减速、反向、加速），不是一下子掉头。
+ */
+const AVOID_DEG = 110;
+const LAND_SPIN = 0.35;
+let spinSign = 0;               // 0 = 还没初始化，取当前自转方向
+let lastSunAngle = 0;
+
+function avoidSun(dt) {
+  if (!controls.autoRotate) return;
+  if (!spinSign) spinSign = Math.sign(controls.autoRotateSpeed) || -1;
+  const vx = controls.target.x - camera.position.x;
+  const vz = controls.target.z - camera.position.z;
+  const sx = U.sunDir.value.x, sz = U.sunDir.value.z;
+  const l = Math.hypot(vx, vz) * Math.hypot(sx, sz);
+  if (l < 1e-6) return;
+  const ang = Math.acos(Math.max(-1, Math.min(1, (vx * sx + vz * sz) / l))) * 180 / Math.PI;
+  if (ang < AVOID_DEG && ang < lastSunAngle && Math.sign(controls.autoRotateSpeed) === spinSign) {
+    spinSign = -spinSign;
+  }
+  lastSunAngle = ang;
+  const want = spinSign * Math.abs(LAND_SPIN);
+  controls.autoRotateSpeed += (want - controls.autoRotateSpeed) * Math.min(1, dt * 1.2);
 }
 
 /** 落地页期间镜头在自转，绕到山坡那一侧时别钻进地里 */
@@ -546,7 +610,10 @@ function animate() {
   walk(dt);
   stepFly(dt);
   controls.update();
-  if (document.body.classList.contains('landing')) keepAboveGround();
+  if (document.body.classList.contains('landing')) {
+    keepAboveGround();
+    avoidSun(dt);
+  }
 
   // --- clipmap 跟随观察点 ---
   // 用 controls.target 而不是相机位置：玩家真正在看的是那儿，
@@ -638,15 +705,90 @@ function fail(msg) {
   document.getElementById('booterr').innerHTML = msg;
 }
 
-init().then(() => {
-  camera.position.copy(CAM_LAND);
-  controls.target.copy(CAM_LAND_TARGET);
-  controls.update();
-  initLanding(controls, { onEnter: flyHome });
+/** 启动页上说明为什么拦，给一个「仍然尝试」；点了才 resolve */
+function askAnyway(msg) {
+  fail(msg);
+  const boot = document.getElementById('boot');
+  boot.classList.add('soft');
+  return new Promise((resolve) => {
+    document.getElementById('bootany').onclick = () => {
+      setOverride();
+      boot.classList.remove('failed', 'soft');
+      resolve();
+    };
+  });
+}
+
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 落地页上实测帧率（落地页背后就是真场景在跑）。
+ * 先等一会儿让着色器编译完、TRAA 攒满；不够 MIN_FPS 就先降到低画质再测一次，
+ * 还不够才把 ENTER 换成说明。已经点进去了就不打扰。
+ */
+async function runProbe(landing) {
+  await Promise.allSettled(loading);
+  await wait(1500);
+  // 量不准（标签页在后台、两秒里只出了几帧 —— 多半是别的什么卡住了主线程）就过会儿再量，
+  // 最多试三次；一直量不准就不下结论，放行
+  const measure = async () => {
+    for (let i = 0; i < 3; i++) {
+      if (landing.entered) return null;
+      const f = await measureFps(2000);
+      if (f != null) return f;
+      await wait(1500);
+    }
+    return null;
+  };
+  if (landing.entered) return;
+  let fps = await measure();
+  if (fps == null || fps >= MIN_FPS) return;
+  if (params.quality > 0) {
+    console.info(`[snow] 落地页实测 ${fps.toFixed(1)} fps，先降到低画质`);
+    ui.setQuality(0);
+    await wait(900);
+    fps = await measure();
+    if (fps == null || fps >= MIN_FPS) return;
+  }
+  if (landing.entered) return;
+  console.warn(`[snow] 低画质下仍只有 ${fps.toFixed(1)} fps，拦在门口`);
+  landing.block(t('gate.slow', Math.round(fps)), setOverride);
+}
+
+async function start() {
+  // ---- 门禁第一关：设备本身（不过就不初始化场景）----
+  const g = await checkDevice();
+  if (g.kind === 'mobile') { fail(t('gate.mobile')); return; }
+  if (g.kind === 'nogpu') { fail(t('boot.nogpu')); return; }
+  if (g.kind === 'weak' && !isOverridden()) {
+    console.warn('[snow] 设备性能可能不足：', g.detail);
+    await askAnyway(t('gate.weak', g.detail));
+  }
+
+  await init();
+  placeLandingCamera();
+
+  // 新手指引：第一次进来，等镜头推进画面之后再浮出来
+  tour = createTour({ interaction, ui, camera });
+  document.getElementById('tourbtn').onclick = () => {
+    document.getElementById('helpbtn').click();       // 先把说明面板收起来
+    tour.start();
+  };
+  const landing = initLanding(controls, {
+    onEnter: () => {
+      flyHome();
+      if (!tourDone()) setTimeout(() => tour.start(), ENTER_T * 1000 + 300);
+    },
+  });
   requestAnimationFrame(() => {
     setTimeout(() => document.getElementById('boot').classList.add('done'), 260);
   });
-}).catch((err) => {
+
+  // ---- 门禁第二关：实测 ----
+  if (!isOverridden()) runProbe(landing);
+}
+
+start().catch((err) => {
   console.error(err);
   if (String(err.message).includes('NO_WEBGPU')) {
     fail(t('boot.nogpu'));

@@ -12,6 +12,8 @@ The snow runs in compute shaders every frame: it falls, settles, slumps down slo
 
 ## What you can do
 
+![Pressing a tower mold onto a castle wall beside a snow bunny and duck, then taking a photo of the scene](assets/snow-day-preview.gif)
+
 - **Shape the snow by hand.** Drag to scrape snow into a bank in front of your palm, or click to leave a handprint. Switch gestures to smooth it flat or pile it up. Move fast and powder sprays into the air.
 - **Build with molds.** Nine shapes: ball, snowman, duck, bunny, tower, wall, igloo, spire and star. Click to press one, drag to lay a row, or stack them. Neighbors fuse together, and you can carve the result by hand.
 - **Leave tracks.** Walk or sprint across the valley. Your marks stay in place as you move away and are still there when you come back, within 128 m.

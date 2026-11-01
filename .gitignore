@@ -13,6 +13,9 @@ assets/*.glb
 # HDRI 源图（15MB）。上线用的是 tools/shrink-hdri.py 生成的 1K 版本。
 assets/winter_lake_01_4k.exr
 
+# 录屏原图（134MB，超过 GitHub 的 100MB 硬上限）。README 用的是压缩后的 snow-day-preview.gif。
+assets/snow-day.gif
+
 # 试验用的小文件
 assets/test-cube.gltf
 
